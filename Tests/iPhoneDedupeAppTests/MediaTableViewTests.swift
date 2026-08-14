@@ -252,6 +252,54 @@ final class MediaTableViewTests: XCTestCase {
         XCTAssertTrue(viewModel.selectedActionIDs.isEmpty, "a plain click must not check the row")
     }
 
+    // MARK: - Click versus drag
+
+    /// Regression: a drag began on the first mouse-dragged event, so a click with a tiny
+    /// hand tremor silently checked the row. A press must travel before it becomes a drag.
+    func testDragActivationRequiresRealPointerTravel() {
+        XCTAssertGreaterThan(MediaTableMetrics.dragActivationDistance, 0)
+        XCTAssertLessThanOrEqual(
+            MediaTableMetrics.dragActivationDistance,
+            10,
+            "too large a threshold would make real drags feel unresponsive"
+        )
+    }
+
+    func testPlainClickNeverChangesActionSelection() {
+        let viewModel = viewModel()
+        let controller = MediaTableController(viewModel: viewModel)
+
+        controller.click(row: 0, modifiers: [])
+        controller.click(row: 2, modifiers: [])
+        controller.click(row: 4, modifiers: [])
+
+        XCTAssertEqual(viewModel.selectedItemID, "e")
+        XCTAssertTrue(viewModel.selectedActionIDs.isEmpty)
+    }
+
+    func testDoubleClickTogglesActionSelection() {
+        let viewModel = viewModel()
+        let controller = MediaTableController(viewModel: viewModel)
+
+        controller.doubleClick(row: 1)
+        XCTAssertEqual(viewModel.selectedActionIDs, ["b"])
+        XCTAssertEqual(viewModel.selectedItemID, "b")
+
+        controller.doubleClick(row: 1)
+        XCTAssertTrue(viewModel.selectedActionIDs.isEmpty)
+    }
+
+    func testCommandClickTogglesOneRowWithoutMovingFocus() {
+        let viewModel = viewModel()
+        let controller = MediaTableController(viewModel: viewModel)
+        controller.click(row: 0, modifiers: [])
+
+        controller.click(row: 3, modifiers: .command)
+
+        XCTAssertEqual(viewModel.selectedActionIDs, ["d"])
+        XCTAssertEqual(viewModel.selectedItemID, "a", "Command-click should not move focus")
+    }
+
     // MARK: - Destructive confirmation gate
 
     func testDeleteRequestOnlyRaisesConfirmation() {

@@ -91,6 +91,13 @@ final class MediaNativeTableView: NSTableView {
         }
 
         let modifiers = MediaTableController.Modifiers(event.modifierFlags)
+
+        if event.clickCount >= 2 {
+            coordinator.controller.doubleClick(row: clickedRow)
+            coordinator.refreshFocusDecoration()
+            return
+        }
+
         coordinator.controller.click(row: clickedRow, modifiers: modifiers)
         coordinator.refreshFocusDecoration()
 
@@ -99,14 +106,25 @@ final class MediaNativeTableView: NSTableView {
     }
 
     /// Drives contiguous drag selection with edge auto-scroll until mouse-up.
+    ///
+    /// A drag only starts once the pointer has actually travelled past
+    /// `MediaTableMetrics.dragActivationDistance`. Without that threshold a click with the
+    /// slightest hand tremor emits a `leftMouseDragged` event and silently checks the row,
+    /// which made a plain click select an item unpredictably.
     private func trackDragSelection(startingAt startRow: Int, initialEvent: NSEvent) {
         guard let coordinator else { return }
         var didBeginDrag = false
+        let origin = initialEvent.locationInWindow
 
         while let event = window?.nextEvent(matching: [.leftMouseDragged, .leftMouseUp]) {
             if event.type == .leftMouseUp { break }
 
             if !didBeginDrag {
+                let travelled = hypot(
+                    event.locationInWindow.x - origin.x,
+                    event.locationInWindow.y - origin.y
+                )
+                guard travelled >= MediaTableMetrics.dragActivationDistance else { continue }
                 coordinator.controller.beginDrag(atRow: startRow)
                 didBeginDrag = true
             }

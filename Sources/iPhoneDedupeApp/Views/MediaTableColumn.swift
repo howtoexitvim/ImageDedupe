@@ -118,6 +118,10 @@ enum MediaTableMetrics {
         max(minimumRowHeight, CGFloat(thumbnailSide) + rowVerticalPadding)
     }
 
+    /// How far the pointer must travel before a press becomes a drag selection. Below
+    /// this, the gesture stays a plain click, which only moves focus.
+    static let dragActivationDistance: CGFloat = 4
+
     /// Distance from a viewport edge within which a drag starts auto-scrolling.
     static let autoScrollMargin: CGFloat = 24
     static let maximumAutoScrollVelocity: CGFloat = 18

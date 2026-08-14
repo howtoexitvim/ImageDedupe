@@ -216,6 +216,12 @@ final class MediaBrowserViewModel: ObservableObject {
         selection.toggleActionSelection(item.id)
     }
 
+    /// Toggle by ID, for native renderers that work in rows/indexes rather than items.
+    func toggleActionSelection(withID id: String) {
+        refreshVisibleOrder()
+        selection.toggleActionSelection(id)
+    }
+
     func prepareContextActionSelection(for item: MediaItem) {
         refreshVisibleOrder()
         if !selection.actionSelectedIDs.contains(item.id) {
