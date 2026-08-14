@@ -21,6 +21,12 @@ struct IPhoneDedupeMacApp: App {
         .windowResizability(.contentMinSize)
         .commands {
             CommandGroup(replacing: .newItem) {}
+            CommandGroup(after: .toolbar) {
+                Button("Reset Layout") {
+                    NotificationCenter.default.post(name: .mediaResetLayout, object: nil)
+                }
+                .keyboardShortcut("0", modifiers: [.command, .option])
+            }
         }
     }
 }
