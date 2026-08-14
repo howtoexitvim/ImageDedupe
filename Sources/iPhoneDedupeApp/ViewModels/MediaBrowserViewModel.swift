@@ -52,6 +52,9 @@ final class MediaBrowserViewModel: ObservableObject {
     /// still only runs from the confirmed action, never from this flag.
     @Published var isConfirmingDelete = false
 
+    /// Set by the List renderer so a header click persists the new sort descriptor.
+    var onSortChanged: ((MediaSortField, DeduperCore.SortOrder) -> Void)?
+
     @Published var reviewScope: MediaReviewScope = .allMedia
     @Published var searchText = ""
     @Published var sortField: MediaSortField = .timestamp
@@ -213,6 +216,12 @@ final class MediaBrowserViewModel: ObservableObject {
         selection.toggleActionSelection(item.id)
     }
 
+    /// Toggle by ID, for native renderers that work in rows/indexes rather than items.
+    func toggleActionSelection(withID id: String) {
+        refreshVisibleOrder()
+        selection.toggleActionSelection(id)
+    }
+
     func prepareContextActionSelection(for item: MediaItem) {
         refreshVisibleOrder()
         if !selection.actionSelectedIDs.contains(item.id) {
@@ -245,6 +254,16 @@ final class MediaBrowserViewModel: ObservableObject {
             sortField = field
             sortOrder = .ascending
         }
+        refreshVisibleOrder()
+        onSortChanged?(sortField, sortOrder)
+    }
+
+    /// Applies a sort without notifying the persistence hook. Used when restoring a
+    /// previously saved descriptor at launch, so restoring does not re-save.
+    func applySort(field: MediaSortField, order: DeduperCore.SortOrder) {
+        sortField = field
+        sortOrder = order
+        refreshVisibleOrder()
     }
 
     func importSelected() {

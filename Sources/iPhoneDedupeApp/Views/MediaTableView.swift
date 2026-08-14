@@ -33,16 +33,40 @@ struct MediaTableView: NSViewRepresentable {
         tableView.headerView = NSTableHeaderView()
         tableView.columnAutoresizingStyle = .lastColumnOnlyAutoresizingStyle
         tableView.intercellSpacing = NSSize(width: 8, height: 0)
+        // Native header drag reordering. The checkbox and thumbnail columns opt out below.
+        tableView.allowsColumnReordering = true
+        tableView.allowsColumnResizing = true
 
-        for column in MediaTableColumn.allCases {
+        let preferences = context.coordinator.preferences
+        for column in preferences.columnOrder {
             let tableColumn = NSTableColumn(identifier: column.userInterfaceIdentifier)
             tableColumn.title = column.title
-            tableColumn.width = column.defaultWidth
+            tableColumn.width = preferences.width(for: column)
             tableColumn.minWidth = column.minimumWidth
             tableColumn.maxWidth = column.maximumWidth
             tableColumn.resizingMask = column.isFlexible ? [.autoresizingMask, .userResizingMask] : .userResizingMask
             tableView.addTableColumn(tableColumn)
         }
+
+        // Persist user-driven resize and reorder.
+        NotificationCenter.default.addObserver(
+            context.coordinator,
+            selector: #selector(Coordinator.columnGeometryDidChange),
+            name: NSTableView.columnDidResizeNotification,
+            object: tableView
+        )
+        NotificationCenter.default.addObserver(
+            context.coordinator,
+            selector: #selector(Coordinator.columnGeometryDidChange),
+            name: NSTableView.columnDidMoveNotification,
+            object: tableView
+        )
+        NotificationCenter.default.addObserver(
+            context.coordinator,
+            selector: #selector(Coordinator.resetLayoutRequested),
+            name: .mediaResetLayout,
+            object: nil
+        )
 
         let scrollView = NSScrollView()
         scrollView.documentView = tableView
@@ -88,9 +112,61 @@ struct MediaTableView: NSViewRepresentable {
             let sortOrder: DeduperCore.SortOrder
         }
 
-        init(viewModel: MediaBrowserViewModel) {
+        let preferences: MediaColumnPreferences
+
+        init(viewModel: MediaBrowserViewModel, preferences: MediaColumnPreferences = MediaColumnPreferences()) {
             self.viewModel = viewModel
             self.controller = MediaTableController(viewModel: viewModel)
+            self.preferences = preferences
+            super.init()
+            // Restore the persisted sort before the first snapshot is published.
+            viewModel.applySort(field: preferences.sortField, order: preferences.sortOrder)
+            viewModel.onSortChanged = { [weak preferences] field, order in
+                preferences?.setSort(field: field, order: order)
+            }
+        }
+
+        deinit {
+            NotificationCenter.default.removeObserver(self)
+        }
+
+        /// Saves column widths and order after a native resize or header drag.
+        @objc func columnGeometryDidChange(_ notification: Notification) {
+            guard let tableView else { return }
+            var order: [MediaTableColumn] = []
+            for tableColumn in tableView.tableColumns {
+                guard let column = MediaTableColumn.column(for: tableColumn.identifier) else { continue }
+                order.append(column)
+                preferences.setWidth(tableColumn.width, for: column)
+            }
+            preferences.setColumnOrder(order)
+        }
+
+        @objc func resetLayoutRequested() {
+            resetLayout()
+        }
+
+        /// Restores the declared layout and persists the reset.
+        func resetLayout() {
+            preferences.reset()
+            guard let tableView else { return }
+
+            for (index, column) in MediaTableColumn.allCases.enumerated() {
+                guard let currentIndex = tableView.tableColumns.firstIndex(where: {
+                    MediaTableColumn.column(for: $0.identifier) == column
+                }) else { continue }
+                if currentIndex != index {
+                    tableView.moveColumn(currentIndex, toColumn: index)
+                }
+            }
+            for tableColumn in tableView.tableColumns {
+                guard let column = MediaTableColumn.column(for: tableColumn.identifier) else { continue }
+                tableColumn.width = column.defaultWidth
+            }
+            viewModel.applySort(
+                field: MediaColumnPreferences.defaultSortField,
+                order: MediaColumnPreferences.defaultSortOrder
+            )
         }
 
         func apply(items: [MediaBrowserViewModel.MediaItem]) {
@@ -280,6 +356,30 @@ struct MediaTableView: NSViewRepresentable {
 
         func selectionShouldChange(in tableView: NSTableView) -> Bool {
             false
+        }
+
+        /// The checkbox and thumbnail columns are row furniture, not data. Keeping them
+        /// pinned to the leading edge is what stops a header drag from putting the
+        /// checkbox in the middle of the row.
+        func tableView(
+            _ tableView: NSTableView,
+            shouldReorderColumn columnIndex: Int,
+            toColumn newColumnIndex: Int
+        ) -> Bool {
+            guard let moved = column(at: columnIndex, in: tableView) else { return false }
+            guard moved.isReorderable else { return false }
+            // Nor may a data column be dragged in front of the pinned ones.
+            let pinnedCount = tableView.tableColumns.prefix { column(at: $0, in: tableView)?.isReorderable == false }.count
+            return newColumnIndex >= pinnedCount
+        }
+
+        private func column(at index: Int, in tableView: NSTableView) -> MediaTableColumn? {
+            guard tableView.tableColumns.indices.contains(index) else { return nil }
+            return MediaTableColumn.column(for: tableView.tableColumns[index].identifier)
+        }
+
+        private func column(at tableColumn: NSTableColumn, in tableView: NSTableView) -> MediaTableColumn? {
+            MediaTableColumn.column(for: tableColumn.identifier)
         }
 
         // MARK: - Cells

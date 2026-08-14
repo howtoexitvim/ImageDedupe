@@ -100,13 +100,23 @@ final class MediaTableController {
     }
 
     /// A plain row click: moves focus and inspector content, never the action selection.
+    /// Shift extends from the anchor; Command toggles one row, matching Finder.
     func click(row: Int, modifiers: Modifiers) {
         guard let id = id(atRow: row) else { return }
         if modifiers.contains(.shift) {
             viewModel.extendSelection(to: id)
+        } else if modifiers.contains(.command) {
+            viewModel.toggleActionSelection(withID: id)
         } else {
             viewModel.selectItem(withID: id)
         }
+    }
+
+    /// Double-click toggles the row's action selection, alongside Space and the checkbox.
+    func doubleClick(row: Int) {
+        guard let id = id(atRow: row) else { return }
+        viewModel.selectItem(withID: id)
+        viewModel.toggleActionSelection(withID: id)
     }
 
     // MARK: - Drag selection

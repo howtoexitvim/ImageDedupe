@@ -92,6 +92,15 @@ enum MediaTableColumn: String, CaseIterable {
     /// Name is the column that absorbs leftover width, matching Finder.
     var isFlexible: Bool { self == .name }
 
+    /// The checkbox and thumbnail are row furniture that must stay pinned to the leading
+    /// edge. Letting a header drag move them would put the checkbox mid-row.
+    var isReorderable: Bool {
+        switch self {
+        case .selection, .thumbnail: return false
+        default: return true
+        }
+    }
+
     static var totalDefaultWidth: CGFloat {
         allCases.reduce(0) { $0 + $1.defaultWidth }
     }
@@ -108,6 +117,10 @@ enum MediaTableMetrics {
     static func rowHeight(thumbnailSide: Double) -> CGFloat {
         max(minimumRowHeight, CGFloat(thumbnailSide) + rowVerticalPadding)
     }
+
+    /// How far the pointer must travel before a press becomes a drag selection. Below
+    /// this, the gesture stays a plain click, which only moves focus.
+    static let dragActivationDistance: CGFloat = 4
 
     /// Distance from a viewport edge within which a drag starts auto-scrolling.
     static let autoScrollMargin: CGFloat = 24

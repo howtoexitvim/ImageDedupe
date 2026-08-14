@@ -17,6 +17,16 @@ struct MediaGridView: View {
     }
 
     var body: some View {
+        gridBody
+            // The Grid is still the SwiftUI renderer until Phase 4, so it has no native
+            // first responder to claim focus ownership. Without this the shared model
+            // never sees `.mediaBrowser` and Escape silently does nothing here, even
+            // though it works in the List.
+            .onAppear { viewModel.setFocusOwner(.mediaBrowser) }
+            .onExitCommand { viewModel.clearSelection() }
+    }
+
+    private var gridBody: some View {
         ScrollView {
             LazyVGrid(columns: columns, spacing: 12) {
                 ForEach(viewModel.filteredItems) { item in
