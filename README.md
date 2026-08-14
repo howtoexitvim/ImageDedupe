@@ -7,7 +7,7 @@ Swift Package for scanning and deleting duplicate iPhone media through Apple's I
 Open this folder in Xcode:
 
 ```sh
-open /Users/shuqi/Desktop/shuqiwhat/02_Work/iPhoneDedupeProject-2026-08-15-0024/Package.swift
+open /Users/shuqi/Desktop/shuqiwhat/02_Work/iPhone_Dedupe_2608-Present/Package.swift
 ```
 
 Xcode can open Swift packages directly. The package contains:
@@ -20,7 +20,7 @@ Xcode can open Swift packages directly. The package contains:
 ## Build And Test
 
 ```sh
-cd /Users/shuqi/Desktop/shuqiwhat/02_Work/iPhoneDedupeProject-2026-08-15-0024
+cd /Users/shuqi/Desktop/shuqiwhat/02_Work/iPhone_Dedupe_2608-Present
 swift test
 swift build -c release
 ```
