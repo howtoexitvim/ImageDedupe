@@ -25,25 +25,38 @@ struct MediaBrowserView: View {
             Divider()
             VStack(spacing: 0) {
                 toolbar
+                    .frame(height: 52)
+                    .zIndex(2)
                 Divider()
-                if viewModel.viewMode == .list {
-                    MediaListView(viewModel: viewModel)
-                } else {
-                    MediaGridView(viewModel: viewModel)
-                }
+                mediaContent
                 Divider()
                 statusBar
             }
             .frame(minWidth: 400, maxWidth: .infinity, maxHeight: .infinity)
-            Divider()
-            InspectorView(viewModel: viewModel)
-                .frame(width: 300)
-                .frame(maxHeight: .infinity)
+            if viewModel.isInspectorVisible {
+                Divider()
+                InspectorView(viewModel: viewModel)
+                    .frame(width: 300)
+                    .frame(maxHeight: .infinity)
+            }
         }
         .task {
             if autoScanOnLaunch {
                 viewModel.scan()
             }
+        }
+    }
+
+    @ViewBuilder
+    private var mediaContent: some View {
+        if viewModel.viewMode == .list {
+            MediaListView(viewModel: viewModel)
+                .zIndex(0)
+                .clipped()
+        } else {
+            MediaGridView(viewModel: viewModel)
+                .zIndex(0)
+                .clipped()
         }
     }
 
@@ -89,72 +102,64 @@ struct MediaBrowserView: View {
     }
 
     private var toolbar: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 10) {
-                Picker("View", selection: $viewModel.viewMode) {
-                    Label("List", systemImage: "list.bullet").tag(MediaBrowserViewModel.ViewMode.list)
-                    Label("Grid", systemImage: "square.grid.3x3").tag(MediaBrowserViewModel.ViewMode.grid)
-                }
-                .pickerStyle(.segmented)
-                .labelsHidden()
-                .frame(width: 132)
-                .help("View mode")
-
-                Divider().frame(height: 22)
-
-                Picker("Kind", selection: $viewModel.selectedKind) {
-                    ForEach(viewModel.kinds, id: \.self) { kind in
-                        Text(kind).tag(kind)
-                    }
-                }
-                .labelsHidden()
-                .frame(width: 116)
-                .help("Filter by file kind")
-
-                Picker("Sort", selection: $viewModel.sortField) {
-                    Text("Name").tag(MediaSortField.name)
-                    Text("Kind").tag(MediaSortField.kind)
-                    Text("Date").tag(MediaSortField.timestamp)
-                    Text("Size").tag(MediaSortField.size)
-                }
-                .labelsHidden()
-                .frame(width: 116)
-                .help("Sort field")
-
-                Picker("Order", selection: $viewModel.sortOrder) {
-                    Text("Asc").tag(SortOrder.ascending)
-                    Text("Desc").tag(SortOrder.descending)
-                }
-                .labelsHidden()
-                .frame(width: 112)
-                .help("Sort order")
-
-                TextField("Search name", text: $viewModel.searchText)
-                    .textFieldStyle(.roundedBorder)
-                    .frame(width: 240)
-
-                Divider().frame(height: 22)
-
-                Image(systemName: "photo")
-                    .foregroundStyle(.secondary)
-                Slider(
-                    value: Binding(
-                        get: { viewModel.displayScale.value },
-                        set: { viewModel.setDisplayScale($0) }
-                    ),
-                    in: 0.75...1.6
-                )
-                .frame(width: 120)
-                .help("Thumbnail size")
-                Image(systemName: "photo.fill")
-                    .foregroundStyle(.secondary)
+        HStack(spacing: 12) {
+            Button {
+                viewModel.toggleInspector()
+            } label: {
+                Image(systemName: "sidebar.right")
             }
-            .frame(minWidth: 900, alignment: .leading)
-            .font(.callout)
-            .controlSize(.regular)
-            .padding(.horizontal, 12)
-            .padding(.vertical, 8)
+            .buttonStyle(.borderless)
+            .help(viewModel.isInspectorVisible ? "Hide inspector" : "Show inspector")
+
+            Divider().frame(height: 24)
+
+            Picker("View", selection: $viewModel.viewMode) {
+                Label("List", systemImage: "list.bullet").tag(MediaBrowserViewModel.ViewMode.list)
+                Label("Grid", systemImage: "square.grid.3x3").tag(MediaBrowserViewModel.ViewMode.grid)
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+            .frame(width: 132)
+            .help("View mode")
+
+            Spacer(minLength: 12)
+
+            HStack(spacing: 6) {
+                Image(systemName: "magnifyingglass")
+                    .foregroundStyle(.secondary)
+                TextField("Search name, kind, size:>2mb, duration:<10s", text: $viewModel.searchText)
+                    .textFieldStyle(.plain)
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 6)
+            .background(Color(nsColor: .textBackgroundColor), in: RoundedRectangle(cornerRadius: 6))
+            .overlay(
+                RoundedRectangle(cornerRadius: 6)
+                    .stroke(Color(nsColor: .separatorColor).opacity(0.7), lineWidth: 1)
+            )
+            .frame(minWidth: 260, idealWidth: 420, maxWidth: 520)
+            .help("Smart search: plain text or tokens like kind:heic size:>2mb duration:<10s")
+
+            Divider().frame(height: 24)
+
+            Image(systemName: "photo")
+                .foregroundStyle(.secondary)
+            Slider(
+                value: Binding(
+                    get: { viewModel.displayScale.value },
+                    set: { viewModel.setDisplayScale($0) }
+                ),
+                in: 0.75...1.6
+            )
+            .frame(width: 120)
+            .help("Thumbnail size")
+            Image(systemName: "photo.fill")
+                .foregroundStyle(.secondary)
         }
+        .font(.callout)
+        .controlSize(.regular)
+        .padding(.horizontal, 12)
+        .background(Color(nsColor: .windowBackgroundColor))
     }
 
     private var statusBar: some View {

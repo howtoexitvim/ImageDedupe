@@ -2,6 +2,7 @@ import SwiftUI
 
 struct MediaGridView: View {
     @ObservedObject var viewModel: MediaBrowserViewModel
+    @State private var isConfirmingDelete = false
 
     private var columns: [GridItem] {
         [
@@ -25,11 +26,21 @@ struct MediaGridView: View {
                                 image: viewModel.thumbnailCache[item.id],
                                 height: viewModel.displayScale.gridThumbnailHeight
                             )
-                            if viewModel.duplicateDeleteIDs.contains(item.id) {
-                                Image(systemName: "exclamationmark.triangle.fill")
-                                    .foregroundStyle(.orange)
-                                    .padding(5)
+                            HStack(spacing: 4) {
+                                if viewModel.duplicateDeleteIDs.contains(item.id) {
+                                    Image(systemName: "exclamationmark.triangle.fill")
+                                        .foregroundStyle(.orange)
+                                }
+                                Button {
+                                    viewModel.toggleActionSelection(item)
+                                } label: {
+                                    Image(systemName: viewModel.selectedActionIDs.contains(item.id) ? "checkmark.square.fill" : "square")
+                                        .foregroundStyle(viewModel.selectedActionIDs.contains(item.id) ? Color.accentColor : Color.white.opacity(0.88))
+                                        .shadow(radius: 1)
+                                }
+                                .buttonStyle(.plain)
                             }
+                            .padding(5)
                         }
                         Text(item.model.name)
                             .font(.caption)
@@ -41,15 +52,51 @@ struct MediaGridView: View {
                     .padding(6)
                     .background(selectionBackground(for: item), in: RoundedRectangle(cornerRadius: 6))
                     .onTapGesture { viewModel.select(item) }
-                    .onAppear { viewModel.loadThumbnails(for: [item]) }
+                    .onAppear { viewModel.loadVisibleDetails(for: item) }
+                    .contextMenu {
+                        Button("Select") {
+                            viewModel.toggleActionSelection(item)
+                        }
+                        Divider()
+                        Button("Import \(actionLabel(for: item))") {
+                            viewModel.prepareContextActionSelection(for: item)
+                            viewModel.importSelected()
+                        }
+                        Button("Delete \(actionLabel(for: item))", role: .destructive) {
+                            viewModel.prepareContextActionSelection(for: item)
+                            isConfirmingDelete = true
+                        }
+                    }
                 }
             }
             .padding(12)
         }
+        .confirmationDialog(
+            "Delete \(viewModel.selectedActionIDs.count) item(s) from this iPhone?",
+            isPresented: $isConfirmingDelete,
+            titleVisibility: .visible
+        ) {
+            Button("Delete From Device", role: .destructive) {
+                viewModel.deleteSelected()
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("This cannot be undone by this app.")
+        }
     }
 
     private func selectionBackground(for item: MediaBrowserViewModel.MediaItem) -> Color {
-        item.id == viewModel.selectedItemID ? Color.accentColor.opacity(0.18) : Color.clear
+        if viewModel.selectedActionIDs.contains(item.id) {
+            return Color.accentColor.opacity(0.24)
+        }
+        return item.id == viewModel.selectedItemID ? Color.accentColor.opacity(0.18) : Color.clear
+    }
+
+    private func actionLabel(for item: MediaBrowserViewModel.MediaItem) -> String {
+        if viewModel.selectedActionIDs.count > 1 {
+            return "\(viewModel.selectedActionIDs.count) Items"
+        }
+        return "\"\(item.model.name)\""
     }
 }
 

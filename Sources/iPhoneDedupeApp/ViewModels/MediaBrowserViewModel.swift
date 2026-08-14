@@ -35,6 +35,7 @@ final class MediaBrowserViewModel: ObservableObject {
     @Published var sortField: MediaSortField = .timestamp
     @Published var sortOrder: DeduperCore.SortOrder = .descending
     @Published var viewMode: ViewMode = .list
+    @Published var isInspectorVisible = false
     @Published var displayScale = MediaDisplayScale(rawValue: 1.0)
     @Published var status = "Connect and unlock your iPhone, then scan."
     @Published var isScanning = false
@@ -61,9 +62,7 @@ final class MediaBrowserViewModel: ObservableObject {
         let scopedIDs = Set(scopedModels.map(\.id))
         let scopedItems = allItems.filter { scopedIDs.contains($0.id) }
         var filters: [MediaFilter] = []
-        if !searchText.isEmpty {
-            filters.append(.nameContains(searchText))
-        }
+        let smartSearch = MediaSearchQuery(searchText)
         if selectedKind != "All" {
             filters.append(.kindIn([selectedKind]))
         }
@@ -71,7 +70,7 @@ final class MediaBrowserViewModel: ObservableObject {
             filters: filters,
             sort: MediaSortDescriptor(field: sortField, order: sortOrder)
         )
-        let filteredModels = query.apply(to: scopedItems.map(\.model))
+        let filteredModels = query.apply(to: scopedItems.map(\.model)).filter { smartSearch.matches($0) }
         let itemByID = Dictionary(uniqueKeysWithValues: scopedItems.map { ($0.id, $0) })
         return filteredModels.compactMap { itemByID[$0.id] }
     }
@@ -123,8 +122,13 @@ final class MediaBrowserViewModel: ObservableObject {
 
     func select(_ item: MediaItem) {
         selectedItemID = item.id
+        isInspectorVisible = true
         loadThumbnails(for: [item])
         loadMetadata(for: item)
+    }
+
+    func toggleInspector() {
+        isInspectorVisible.toggle()
     }
 
     func toggleActionSelection(_ item: MediaItem) {
