@@ -6,6 +6,7 @@ struct MediaBrowserView: View {
     @StateObject private var viewModel = MediaBrowserViewModel()
     @State private var sidebarSelection: SidebarItem = .allMedia
     @State private var isConfirmingDelete = false
+    @State private var isSearchActive = false
     private let autoScanOnLaunch: Bool
 
     private enum SidebarItem: String, Hashable {
@@ -124,11 +125,11 @@ struct MediaBrowserView: View {
 
             Spacer(minLength: 12)
 
-            NativeSearchField(
+            SearchInputView(
                 text: $viewModel.searchText,
+                isActive: $isSearchActive,
                 placeholder: "name, kind:heic, size:>2mb, duration:<10s"
             )
-            .frame(height: 28)
             .frame(minWidth: 260, idealWidth: 420, maxWidth: 520)
             .help("Smart search: plain text or tokens like kind:heic size:>2mb duration:<10s")
 
