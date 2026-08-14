@@ -49,3 +49,26 @@ import Testing
     #expect(!DeleteRequestPolicy.shouldCallDeviceDelete(plannedDeleteCount: 0))
     #expect(DeleteRequestPolicy.shouldCallDeviceDelete(plannedDeleteCount: 1))
 }
+
+@Test func nameKindSizeRuleIsACompositeDefinition() {
+    let fields = DuplicateRule.nameKindSize.definition.fields
+
+    #expect(fields.map(\.field) == [.name, .kind, .size])
+    #expect(fields[0].normalizers == [.lowercase])
+    #expect(fields[1].normalizers == [.uppercase])
+    #expect(fields[2].normalizers == [])
+}
+
+@Test func compositeDefinitionBuildsExpectedKey() {
+    let file = DeviceMediaFile(
+        id: "a",
+        name: "Img_1.jpg",
+        kind: "jpg",
+        size: 120,
+        timestamp: nil,
+        width: nil,
+        height: nil
+    )
+
+    #expect(DuplicateRule.nameKindSize.definition.key(for: file) == "img_1.jpg|JPG|120")
+}
