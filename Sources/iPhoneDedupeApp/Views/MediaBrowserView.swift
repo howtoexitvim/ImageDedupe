@@ -88,8 +88,6 @@ struct MediaBrowserView: View {
 
     private var toolbar: some View {
         HStack(spacing: 10) {
-            Text("View")
-                .foregroundStyle(.secondary)
             Picker("View", selection: $viewModel.viewMode) {
                 Label("List", systemImage: "list.bullet").tag(MediaBrowserViewModel.ViewMode.list)
                 Label("Grid", systemImage: "square.grid.3x3").tag(MediaBrowserViewModel.ViewMode.grid)
@@ -97,11 +95,10 @@ struct MediaBrowserView: View {
             .pickerStyle(.segmented)
             .labelsHidden()
             .frame(width: 132)
+            .help("View mode")
 
             Divider().frame(height: 22)
 
-            Text("Kind")
-                .foregroundStyle(.secondary)
             Picker("Kind", selection: $viewModel.selectedKind) {
                 ForEach(viewModel.kinds, id: \.self) { kind in
                     Text(kind).tag(kind)
@@ -109,9 +106,8 @@ struct MediaBrowserView: View {
             }
             .labelsHidden()
             .frame(width: 116)
+            .help("Filter by file kind")
 
-            Text("Sort")
-                .foregroundStyle(.secondary)
             Picker("Sort", selection: $viewModel.sortField) {
                 Text("Name").tag(MediaSortField.name)
                 Text("Kind").tag(MediaSortField.kind)
@@ -120,15 +116,15 @@ struct MediaBrowserView: View {
             }
             .labelsHidden()
             .frame(width: 116)
+            .help("Sort field")
 
-            Text("Order")
-                .foregroundStyle(.secondary)
             Picker("Order", selection: $viewModel.sortOrder) {
                 Text("Asc").tag(SortOrder.ascending)
                 Text("Desc").tag(SortOrder.descending)
             }
             .labelsHidden()
             .frame(width: 112)
+            .help("Sort order")
 
             Spacer(minLength: 12)
 
@@ -149,6 +145,7 @@ struct MediaBrowserView: View {
                 in: 0.75...1.6
             )
             .frame(width: 120)
+            .help("Thumbnail size")
             Image(systemName: "photo.fill")
                 .foregroundStyle(.secondary)
         }

@@ -2,21 +2,24 @@ import SwiftUI
 
 struct MediaListView: View {
     @ObservedObject var viewModel: MediaBrowserViewModel
+    private let tableWidth: Double = 1160
 
     var body: some View {
-        VStack(spacing: 0) {
-            header
-            Divider()
-            ScrollView([.vertical, .horizontal]) {
-                LazyVStack(spacing: 0) {
+        ScrollView(.horizontal) {
+            VStack(spacing: 0) {
+                header
+                Divider()
+                ScrollView(.vertical) {
+                    LazyVStack(spacing: 0) {
                     ForEach(Array(viewModel.filteredItems.enumerated()), id: \.element.id) { index, item in
                         row(for: item, index: index)
                             .onTapGesture { viewModel.select(item) }
                             .onAppear { viewModel.loadThumbnails(for: [item]) }
+                        }
                     }
                 }
-                .frame(minWidth: 1180, alignment: .leading)
             }
+            .frame(width: tableWidth, alignment: .leading)
         }
     }
 
@@ -43,7 +46,7 @@ struct MediaListView: View {
         }
         .padding(.horizontal, 12)
         .frame(height: 34)
-        .frame(minWidth: 1180, alignment: .leading)
+        .frame(width: tableWidth, alignment: .leading)
         .background(Color(nsColor: .controlBackgroundColor))
     }
 
@@ -102,7 +105,7 @@ struct MediaListView: View {
         .font(.callout)
         .padding(.horizontal, 12)
         .frame(height: max(34, viewModel.displayScale.listThumbnailSide + 10))
-        .frame(minWidth: 1180, alignment: .leading)
+        .frame(width: tableWidth, alignment: .leading)
         .background(rowBackground(for: item, index: index))
     }
 
