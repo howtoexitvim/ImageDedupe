@@ -3,9 +3,17 @@ import SwiftUI
 struct MediaGridView: View {
     @ObservedObject var viewModel: MediaBrowserViewModel
 
-    private let columns = [
-        GridItem(.adaptive(minimum: 118, maximum: 150), spacing: 10)
-    ]
+    private var columns: [GridItem] {
+        [
+            GridItem(
+                .adaptive(
+                    minimum: viewModel.displayScale.gridMinimumSide,
+                    maximum: viewModel.displayScale.gridMaximumSide
+                ),
+                spacing: 10
+            )
+        ]
+    }
 
     var body: some View {
         ScrollView {
@@ -13,7 +21,10 @@ struct MediaGridView: View {
                 ForEach(viewModel.filteredItems) { item in
                     VStack(alignment: .leading, spacing: 5) {
                         ZStack(alignment: .topTrailing) {
-                            ThumbnailTile(image: viewModel.thumbnailCache[item.id])
+                            ThumbnailTile(
+                                image: viewModel.thumbnailCache[item.id],
+                                height: viewModel.displayScale.gridThumbnailHeight
+                            )
                             if viewModel.duplicateDeleteIDs.contains(item.id) {
                                 Image(systemName: "exclamationmark.triangle.fill")
                                     .foregroundStyle(.orange)
@@ -44,6 +55,7 @@ struct MediaGridView: View {
 
 struct ThumbnailTile: View {
     let image: NSImage?
+    let height: Double
 
     var body: some View {
         Group {
@@ -57,7 +69,7 @@ struct ThumbnailTile: View {
                     .foregroundStyle(.secondary)
             }
         }
-        .frame(height: 108)
+        .frame(height: height)
         .frame(maxWidth: .infinity)
         .background(Color.secondary.opacity(0.08))
         .clipShape(RoundedRectangle(cornerRadius: 5))

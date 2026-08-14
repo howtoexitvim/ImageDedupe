@@ -3,6 +3,11 @@ import SwiftUI
 
 struct MediaBrowserView: View {
     @StateObject private var viewModel = MediaBrowserViewModel()
+    private let autoScanOnLaunch: Bool
+
+    init(autoScanOnLaunch: Bool = false) {
+        self.autoScanOnLaunch = autoScanOnLaunch
+    }
 
     var body: some View {
         NavigationSplitView {
@@ -25,6 +30,11 @@ struct MediaBrowserView: View {
             InspectorView(viewModel: viewModel)
                 .frame(minWidth: 320, idealWidth: 340, maxWidth: 380, maxHeight: .infinity)
                 .navigationSplitViewColumnWidth(min: 320, ideal: 340, max: 380)
+        }
+        .task {
+            if autoScanOnLaunch {
+                viewModel.scan()
+            }
         }
     }
 
@@ -109,6 +119,21 @@ struct MediaBrowserView: View {
                 .textFieldStyle(.roundedBorder)
                 .frame(minWidth: 180, idealWidth: 260, maxWidth: 360)
                 .layoutPriority(1)
+
+            Divider().frame(height: 22)
+
+            Image(systemName: "photo")
+                .foregroundStyle(.secondary)
+            Slider(
+                value: Binding(
+                    get: { viewModel.displayScale.value },
+                    set: { viewModel.setDisplayScale($0) }
+                ),
+                in: 0.75...1.6
+            )
+            .frame(width: 120)
+            Image(systemName: "photo.fill")
+                .foregroundStyle(.secondary)
         }
         .font(.callout)
         .controlSize(.regular)

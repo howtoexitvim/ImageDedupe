@@ -20,6 +20,10 @@ let package = Package(
             name: "iPhoneDedupeApp",
             dependencies: ["DeduperCore", "DeviceMediaKit"]
         ),
+        .executableTarget(
+            name: "iPhoneDedupeVerifier",
+            dependencies: ["DeduperCore", "DeviceMediaKit"]
+        ),
         .testTarget(
             name: "DeduperCoreTests",
             dependencies: ["DeduperCore"]

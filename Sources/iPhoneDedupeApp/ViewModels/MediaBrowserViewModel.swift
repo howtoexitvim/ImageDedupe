@@ -6,10 +6,16 @@ import ImageCaptureCore
 
 @MainActor
 final class MediaBrowserViewModel: ObservableObject {
-    struct MediaItem: Identifiable {
+    struct MediaItem: Identifiable, @unchecked Sendable {
         let model: DeviceMediaFile
         let cameraFile: ICCameraFile
         var id: String { model.id }
+    }
+
+    private struct ScanPayload: @unchecked Sendable {
+        let deviceName: String
+        let items: [MediaItem]
+        let plan: DuplicatePlan
     }
 
     enum ViewMode: String, CaseIterable, Identifiable {
@@ -27,12 +33,11 @@ final class MediaBrowserViewModel: ObservableObject {
     @Published var sortField: MediaSortField = .timestamp
     @Published var sortOrder: DeduperCore.SortOrder = .descending
     @Published var viewMode: ViewMode = .list
+    @Published var displayScale = MediaDisplayScale(rawValue: 1.0)
     @Published var status = "Connect and unlock your iPhone, then scan."
     @Published var isScanning = false
     @Published var thumbnailCache: [String: NSImage] = [:]
     @Published var duplicatePlan = DuplicatePlan(keep: [], delete: [])
-
-    private var scanner: DeviceSessionController?
 
     var kinds: [String] {
         let values = Set(allItems.map { $0.model.kind.uppercased() })
@@ -72,28 +77,24 @@ final class MediaBrowserViewModel: ObservableObject {
     }
 
     func scan() {
+        guard !isScanning else {
+            return
+        }
         isScanning = true
         status = "Scanning connected iPhone..."
+        fputs("ui-scan-started\n", stderr)
         Task { [weak self] in
             guard let self else {
                 return
             }
             do {
-                let scanner = DeviceSessionController(timeoutSeconds: 180)
-                let result = try scanner.scan()
-                let items = result.files.map { MediaItem(model: $0.model, cameraFile: $0.cameraFile) }
-                let plan = DuplicatePlanner.plan(files: items.map(\.model), rule: .nameKindSize)
-
-                self.scanner = scanner
-                self.deviceName = result.deviceName
-                self.allItems = items
-                self.duplicatePlan = plan
-                self.selectedItemID = items.first?.id
-                self.status = "Scanned \(items.count) items. Conservative duplicates: \(plan.delete.count)."
-                self.isScanning = false
-                self.loadThumbnails(for: Array(items.prefix(96)))
+                let payload = try await Task.detached(priority: .userInitiated) {
+                    try Self.scanDevice(timeoutSeconds: 180)
+                }.value
+                self.applyScanPayload(payload)
             } catch {
                 self.status = "Scan failed: \(error)"
+                fputs("ui-scan-failed: \(error)\n", stderr)
                 self.isScanning = false
             }
         }
@@ -110,16 +111,53 @@ final class MediaBrowserViewModel: ObservableObject {
             return
         }
 
-        Task { [weak self] in
+        Task.detached(priority: .utility) { [weak self] in
             guard let self else {
                 return
             }
+            var loaded: [(id: String, image: NSImage)] = []
             for item in missing {
                 guard let image = ThumbnailProvider.thumbnail(for: item.cameraFile, timeoutSeconds: 6) else {
                     continue
                 }
-                self.thumbnailCache[item.id] = image
+                loaded.append((id: item.id, image: image))
             }
+            guard !loaded.isEmpty else {
+                return
+            }
+            try? await Task.sleep(nanoseconds: 250_000_000)
+            await self.cacheThumbnails(loaded)
+        }
+    }
+
+    func setDisplayScale(_ rawValue: Double) {
+        displayScale = MediaDisplayScale(rawValue: rawValue)
+    }
+
+    nonisolated private static func scanDevice(timeoutSeconds: TimeInterval) throws -> ScanPayload {
+        let result = try DeviceSessionController(timeoutSeconds: timeoutSeconds).scan()
+        let items = result.files.map { MediaItem(model: $0.model, cameraFile: $0.cameraFile) }
+        let plan = DuplicatePlanner.plan(files: items.map(\.model), rule: .nameKindSize)
+        return ScanPayload(deviceName: result.deviceName, items: items, plan: plan)
+    }
+
+    private func applyScanPayload(_ payload: ScanPayload) {
+        deviceName = payload.deviceName
+        allItems = payload.items
+        duplicatePlan = payload.plan
+        selectedItemID = nil
+        status = "Scanned \(payload.items.count) items. Conservative duplicates: \(payload.plan.delete.count)."
+        fputs("ui-scan-succeeded: scanned=\(payload.items.count) duplicates=\(payload.plan.delete.count)\n", stderr)
+        isScanning = false
+        Task { @MainActor [weak self, items = payload.items] in
+            await Task.yield()
+            self?.loadThumbnails(for: Array(items.prefix(96)))
+        }
+    }
+
+    private func cacheThumbnails(_ images: [(id: String, image: NSImage)]) {
+        for image in images {
+            thumbnailCache[image.id] = image.image
         }
     }
 }
