@@ -7,7 +7,7 @@ struct MediaBrowserView: View {
     var body: some View {
         NavigationSplitView {
             sidebar
-                .navigationSplitViewColumnWidth(min: 190, ideal: 220)
+                .navigationSplitViewColumnWidth(min: 220, ideal: 236, max: 270)
         } content: {
             VStack(spacing: 0) {
                 toolbar
@@ -20,9 +20,11 @@ struct MediaBrowserView: View {
                 Divider()
                 statusBar
             }
+            .navigationSplitViewColumnWidth(min: 680, ideal: 860)
         } detail: {
             InspectorView(viewModel: viewModel)
-                .navigationSplitViewColumnWidth(min: 280, ideal: 320)
+                .frame(minWidth: 320, idealWidth: 340, maxWidth: 380, maxHeight: .infinity)
+                .navigationSplitViewColumnWidth(min: 320, ideal: 340, max: 380)
         }
     }
 
@@ -30,19 +32,25 @@ struct MediaBrowserView: View {
         List(selection: .constant("iphone")) {
             Section("Devices") {
                 Label(viewModel.deviceName, systemImage: "iphone")
+                    .lineLimit(1)
                     .tag("iphone")
             }
             Section("Review") {
                 Label("All Media", systemImage: "photo.on.rectangle")
+                    .lineLimit(1)
                 Label("Duplicates", systemImage: "rectangle.on.rectangle")
+                    .lineLimit(1)
                     .badge(viewModel.duplicatePlan.delete.count)
             }
         }
+        .listStyle(.sidebar)
         .safeAreaInset(edge: .bottom) {
             Button {
                 viewModel.scan()
             } label: {
                 Label(viewModel.isScanning ? "Scanning..." : "Scan iPhone", systemImage: "arrow.clockwise")
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.85)
                     .frame(maxWidth: .infinity)
             }
             .disabled(viewModel.isScanning)
@@ -53,42 +61,57 @@ struct MediaBrowserView: View {
 
     private var toolbar: some View {
         HStack(spacing: 10) {
+            Text("View")
+                .foregroundStyle(.secondary)
             Picker("View", selection: $viewModel.viewMode) {
                 Label("List", systemImage: "list.bullet").tag(MediaBrowserViewModel.ViewMode.list)
                 Label("Grid", systemImage: "square.grid.3x3").tag(MediaBrowserViewModel.ViewMode.grid)
             }
             .pickerStyle(.segmented)
-            .frame(width: 150)
+            .labelsHidden()
+            .frame(width: 132)
 
             Divider().frame(height: 22)
 
+            Text("Kind")
+                .foregroundStyle(.secondary)
             Picker("Kind", selection: $viewModel.selectedKind) {
                 ForEach(viewModel.kinds, id: \.self) { kind in
                     Text(kind).tag(kind)
                 }
             }
-            .frame(width: 110)
+            .labelsHidden()
+            .frame(width: 116)
 
+            Text("Sort")
+                .foregroundStyle(.secondary)
             Picker("Sort", selection: $viewModel.sortField) {
                 Text("Name").tag(MediaSortField.name)
                 Text("Kind").tag(MediaSortField.kind)
                 Text("Date").tag(MediaSortField.timestamp)
                 Text("Size").tag(MediaSortField.size)
             }
-            .frame(width: 110)
+            .labelsHidden()
+            .frame(width: 116)
 
+            Text("Order")
+                .foregroundStyle(.secondary)
             Picker("Order", selection: $viewModel.sortOrder) {
                 Text("Asc").tag(SortOrder.ascending)
                 Text("Desc").tag(SortOrder.descending)
             }
-            .frame(width: 90)
+            .labelsHidden()
+            .frame(width: 112)
 
-            Spacer()
+            Spacer(minLength: 12)
 
             TextField("Search name", text: $viewModel.searchText)
                 .textFieldStyle(.roundedBorder)
-                .frame(width: 220)
+                .frame(minWidth: 180, idealWidth: 260, maxWidth: 360)
+                .layoutPriority(1)
         }
+        .font(.callout)
+        .controlSize(.regular)
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
     }
@@ -97,9 +120,12 @@ struct MediaBrowserView: View {
         HStack {
             Text(viewModel.status)
                 .lineLimit(1)
+                .layoutPriority(1)
             Spacer()
             Text("\(viewModel.filteredItems.count) shown / \(viewModel.allItems.count) total")
+                .lineLimit(1)
             Text("Would delete \(viewModel.duplicatePlan.delete.count)")
+                .lineLimit(1)
         }
         .font(.caption)
         .foregroundStyle(.secondary)

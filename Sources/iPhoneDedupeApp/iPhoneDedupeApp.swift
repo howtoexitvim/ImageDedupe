@@ -5,7 +5,7 @@ struct IPhoneDedupeMacApp: App {
     var body: some Scene {
         WindowGroup("iPhone Dedupe") {
             MediaBrowserView()
-                .frame(minWidth: 1120, minHeight: 720)
+                .frame(minWidth: 1180, minHeight: 740)
         }
         .windowStyle(.titleBar)
         .commands {

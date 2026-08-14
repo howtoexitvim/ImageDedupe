@@ -1,6 +1,8 @@
-# iPhone Dedupe Project
+# iPhone Dedupe
 
-Swift Package for scanning and deleting duplicate iPhone media through Apple's ImageCaptureCore framework.
+Mac-native iPhone media cleanup app built on Apple's ImageCaptureCore framework.
+
+The current product direction is app-first: connect an iPhone, scan the device media catalog, browse it visually, filter/sort/search, preview files, and review conservative duplicate candidates. Direct deletion from the app is intentionally deferred until the review and confirmation flow is trustworthy.
 
 ## Open In Xcode
 
@@ -13,36 +15,28 @@ open /Users/shuqi/Desktop/shuqiwhat/02_Work/iPhone_Dedupe_2608-Present/Package.s
 Xcode can open Swift packages directly. The package contains:
 
 - `DeduperCore`: duplicate planning logic.
-- `iphone-dedupe`: command-line executable that talks to ImageCaptureCore.
+- `DeviceMediaKit`: ImageCaptureCore device scanning, media mapping, thumbnails, and future delete execution.
+- `iPhoneDedupeApp`: SwiftUI macOS app.
 - `DeduperCoreTests`: unit tests.
-- `docs/`: product log and product spec for the macOS app direction.
+- `docs/`: product log, architecture notes, and product spec.
 
 ## Build And Test
 
 ```sh
 cd /Users/shuqi/Desktop/shuqiwhat/02_Work/iPhone_Dedupe_2608-Present
 swift test
-swift build -c release
+swift build
 ```
 
-The release binary will be generated at `.build/release/iphone-dedupe`.
-
-## Dry Run
+Run the local debug app:
 
 ```sh
-.build/release/iphone-dedupe --rule name-kind-size --timeout 180 --csv ./iphone-dedupe-dry-run.csv
-```
-
-## Delete From Device
-
-Review the CSV first. Then keep the iPhone unlocked, keep the screen awake, and approve Trust This Mac if prompted.
-
-```sh
-.build/release/iphone-dedupe --rule name-kind-size --delete --i-understand-this-deletes-from-device --timeout 180 --csv ./iphone-dedupe-delete.csv
+.build/debug/iPhoneDedupeApp
 ```
 
 ## Notes
 
 - The original unlock failure was ImageCaptureCore returning `com.apple.ImageCaptureCore Code=-9943`.
 - The current version retries that specific unlock/access-restricted error until the timeout expires.
-- Quit Image Capture before running the CLI, because it can hold the same device session.
+- Quit Image Capture before scanning, because it can hold the same device session.
+- v0.1 is read-only in the UI; deletion belongs to the next safe review phase.

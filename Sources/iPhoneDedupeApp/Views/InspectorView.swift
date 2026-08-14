@@ -24,8 +24,12 @@ struct InspectorView: View {
                 .font(.headline)
             Text("Select a media item to inspect it.")
                 .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+                .lineLimit(2)
         }
+        .frame(maxWidth: 260)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .padding(24)
     }
 
     private func preview(for item: MediaBrowserViewModel.MediaItem) -> some View {
@@ -49,10 +53,12 @@ struct InspectorView: View {
             Text(item.model.name)
                 .font(.headline)
                 .lineLimit(2)
+                .minimumScaleFactor(0.85)
 
             if viewModel.duplicateDeleteIDs.contains(item.id) {
                 Label("Conservative duplicate candidate", systemImage: "rectangle.on.rectangle")
                     .foregroundStyle(.orange)
+                    .lineLimit(2)
             }
         }
         .padding(14)
@@ -86,6 +92,7 @@ struct InspectorView: View {
             Spacer()
             Text(value)
                 .multilineTextAlignment(.trailing)
+                .lineLimit(2)
         }
     }
 }
