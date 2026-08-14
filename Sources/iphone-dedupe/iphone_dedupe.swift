@@ -1,6 +1,6 @@
 import DeduperCore
+import DeviceMediaKit
 import Foundation
-import ImageCaptureCore
 
 struct Options {
     var rule: DuplicateRule = .nameKindSize
@@ -13,188 +13,13 @@ struct Options {
 
 enum CLIError: Error, CustomStringConvertible {
     case usage(String)
-    case noDevice
-    case deviceLocked(String)
-    case openFailed(String)
-    case timeout(String)
-    case deleteNotConfirmed
 
     var description: String {
         switch self {
-        case .usage(let message), .deviceLocked(let message), .openFailed(let message), .timeout(let message):
+        case .usage(let message):
             return message
-        case .noDevice:
-            return "No ImageCaptureCore camera device found. Connect and unlock the iPhone, then trust this Mac."
-        case .deleteNotConfirmed:
-            return "Refusing to delete. Add both --delete and --i-understand-this-deletes-from-device."
         }
     }
-}
-
-final class CameraScanner: NSObject, ICDeviceBrowserDelegate, ICCameraDeviceDelegate {
-    private let options: Options
-    private let browser = ICDeviceBrowser()
-    private var selectedDevice: ICCameraDevice?
-    private var openError: Error?
-    private var isReady = false
-    private var removed = false
-
-    init(options: Options) {
-        self.options = options
-        super.init()
-        browser.delegate = self
-        browser.browsedDeviceTypeMask = ICDeviceTypeMask(rawValue: ICDeviceTypeMask.camera.rawValue | ICDeviceLocationTypeMask.local.rawValue)!
-    }
-
-    func scan() throws -> (device: ICCameraDevice, files: [(DeviceMediaFile, ICCameraFile)]) {
-        browser.start()
-        defer { browser.stop() }
-
-        let deadline = Date().addingTimeInterval(options.timeoutSeconds)
-        while selectedDevice == nil && Date() < deadline {
-            RunLoop.current.run(mode: .default, before: Date().addingTimeInterval(0.1))
-        }
-
-        guard let device = selectedDevice else {
-            throw CLIError.noDevice
-        }
-
-        if device.isLocked || device.isAccessRestrictedAppleDevice {
-            fputs("warning: ImageCaptureCore reports the device as locked/access-restricted; attempting session open anyway.\n", stderr)
-        }
-
-        device.delegate = self
-        requestOpenSession(on: device)
-        while !isReady && !removed && Date() < deadline {
-            RunLoop.current.run(mode: .default, before: Date().addingTimeInterval(0.1))
-
-            if let error = openError {
-                if shouldRetryOpenSession(error) {
-                    fputs("warning: iPhone still reports locked/access-restricted. Unlock it, keep the screen awake, and approve Trust This Mac if prompted; retrying until timeout.\n", stderr)
-                    openError = nil
-                    Thread.sleep(forTimeInterval: 1.0)
-                    requestOpenSession(on: device)
-                    continue
-                }
-                break
-            }
-        }
-
-        if let openError {
-            throw CLIError.openFailed("Could not open ImageCaptureCore session: \(openError)")
-        }
-        if removed {
-            throw CLIError.noDevice
-        }
-        guard isReady else {
-            throw CLIError.timeout("Timed out waiting for iPhone media catalog.")
-        }
-
-        let cameraFiles = (device.mediaFiles ?? []).compactMap { $0 as? ICCameraFile }
-        let mapped = cameraFiles.enumerated().map { index, file in
-            (makeDeviceMediaFile(file, fallbackIndex: index), file)
-        }
-        return (device, mapped)
-    }
-
-    func delete(_ files: [ICCameraFile], from device: ICCameraDevice) throws -> DeleteSummary {
-        guard options.delete, options.confirmedDeviceDelete else {
-            throw CLIError.deleteNotConfirmed
-        }
-        guard #available(macOS 10.15, *) else {
-            device.requestDeleteFiles(files)
-            return DeleteSummary(successful: files, failed: [], canceled: [], error: nil)
-        }
-
-        var done = false
-        var summary = DeleteSummary(successful: [], failed: [], canceled: [], error: nil)
-        _ = device.requestDeleteFiles(files, deleteFailed: { failures in
-            summary.failed.append(contentsOf: failures.values.compactMap { $0 as? ICCameraFile })
-        }, completion: { result, error in
-            let successful = result[.successful] ?? []
-            let failed = result[.failed] ?? []
-            let canceled = result[.canceled] ?? []
-            summary.successful = successful.compactMap { $0 as? ICCameraFile }
-            summary.failed.append(contentsOf: failed.compactMap { $0 as? ICCameraFile })
-            summary.canceled = canceled.compactMap { $0 as? ICCameraFile }
-            summary.error = error
-            done = true
-        })
-
-        let deadline = Date().addingTimeInterval(options.timeoutSeconds)
-        while !done && Date() < deadline {
-            RunLoop.current.run(mode: .default, before: Date().addingTimeInterval(0.1))
-        }
-
-        guard done else {
-            throw CLIError.timeout("Timed out waiting for delete completion.")
-        }
-        return summary
-    }
-
-    func deviceBrowser(_ browser: ICDeviceBrowser, didAdd device: ICDevice, moreComing: Bool) {
-        guard selectedDevice == nil, let camera = device as? ICCameraDevice else {
-            return
-        }
-        if let needle = options.deviceNameContains?.lowercased(),
-           !(camera.name ?? "").lowercased().contains(needle) {
-            return
-        }
-        selectedDevice = camera
-    }
-
-    func deviceBrowser(_ browser: ICDeviceBrowser, didRemove device: ICDevice, moreGoing: Bool) {
-        if selectedDevice === device {
-            removed = true
-        }
-    }
-
-    func device(_ device: ICDevice, didOpenSessionWithError error: Error?) {
-        openError = error
-    }
-
-    func device(_ device: ICDevice, didCloseSessionWithError error: Error?) {}
-
-    func didRemove(_ device: ICDevice) {
-        if selectedDevice === device {
-            removed = true
-        }
-    }
-
-    func deviceDidBecomeReady(withCompleteContentCatalog device: ICCameraDevice) {
-        isReady = true
-    }
-
-    func cameraDevice(_ camera: ICCameraDevice, didAdd items: [ICCameraItem]) {}
-    func cameraDevice(_ camera: ICCameraDevice, didRemove items: [ICCameraItem]) {}
-    func cameraDevice(_ camera: ICCameraDevice, didReceiveThumbnail thumbnail: CGImage?, for item: ICCameraItem, error: Error?) {}
-    func cameraDevice(_ camera: ICCameraDevice, didReceiveMetadata metadata: [AnyHashable: Any]?, for item: ICCameraItem, error: Error?) {}
-    func cameraDevice(_ camera: ICCameraDevice, didRenameItems items: [ICCameraItem]) {}
-    func cameraDeviceDidChangeCapability(_ camera: ICCameraDevice) {}
-    func cameraDevice(_ camera: ICCameraDevice, didReceivePTPEvent eventData: Data) {}
-    func cameraDeviceDidRemoveAccessRestriction(_ device: ICDevice) {}
-    func cameraDeviceDidEnableAccessRestriction(_ device: ICDevice) {}
-
-    private func requestOpenSession(on device: ICCameraDevice) {
-        openError = nil
-        device.requestOpenSession()
-    }
-
-    private func shouldRetryOpenSession(_ error: Error) -> Bool {
-        let nsError = error as NSError
-        return OpenSessionRetry.shouldRetry(
-            domain: nsError.domain,
-            code: nsError.code,
-            description: nsError.localizedDescription
-        )
-    }
-}
-
-struct DeleteSummary {
-    var successful: [ICCameraFile]
-    var failed: [ICCameraFile]
-    var canceled: [ICCameraFile]
-    var error: Error?
 }
 
 @main
@@ -202,15 +27,19 @@ struct IPhoneDedupe {
     static func main() {
         do {
             let options = try parseOptions(CommandLine.arguments)
-            let scanner = CameraScanner(options: options)
+            let scanner = DeviceSessionController(
+                deviceNameContains: options.deviceNameContains,
+                timeoutSeconds: options.timeoutSeconds
+            )
             let scan = try scanner.scan()
-            let plan = DuplicatePlanner.plan(files: scan.files.map(\.0), rule: options.rule)
+            let models = scan.files.map(\.model)
+            let plan = DuplicatePlanner.plan(files: models, rule: options.rule)
             let deleteIDs = Set(plan.delete.map(\.id))
-            let filesToDelete = scan.files.filter { deleteIDs.contains($0.0.id) }
+            let filesToDelete = scan.files.filter { deleteIDs.contains($0.model.id) }
             let csvURL = URL(fileURLWithPath: options.csvPath ?? defaultCSVPath())
-            try writeCSV(scan.files.map(\.0), plan: plan, to: csvURL)
+            try writeCSV(models, plan: plan, to: csvURL)
 
-            print("Device: \(scan.device.name ?? "unknown")")
+            print("Device: \(scan.deviceName)")
             print("Files scanned: \(scan.files.count)")
             print("Rule: \(options.rule.rawValue)")
             print("Duplicates planned for deletion: \(filesToDelete.count)")
@@ -218,7 +47,11 @@ struct IPhoneDedupe {
 
             if options.delete {
                 if DeleteRequestPolicy.shouldCallDeviceDelete(plannedDeleteCount: filesToDelete.count) {
-                    let summary = try scanner.delete(filesToDelete.map(\.1), from: scan.device)
+                    let summary = try scanner.delete(
+                        filesToDelete.map(\.cameraFile),
+                        from: scan.device,
+                        confirmed: options.confirmedDeviceDelete
+                    )
                     print("Deleted from device: \(summary.successful.count)")
                     print("Failed: \(summary.failed.count), canceled: \(summary.canceled.count)")
                     if let error = summary.error {
@@ -238,36 +71,6 @@ struct IPhoneDedupe {
             Foundation.exit(1)
         }
     }
-}
-
-private func makeDeviceMediaFile(_ file: ICCameraFile, fallbackIndex: Int) -> DeviceMediaFile {
-    let name = file.name ?? file.originalFilename ?? "unknown-\(fallbackIndex)"
-    return DeviceMediaFile(
-        id: "\(file.ptpObjectHandle)-\(fallbackIndex)-\(name)",
-        name: name,
-        kind: kind(for: file, name: name),
-        size: Int64(file.fileSize),
-        timestamp: timestamp(for: file),
-        width: file.width > 0 ? file.width : nil,
-        height: file.height > 0 ? file.height : nil
-    )
-}
-
-private func kind(for file: ICCameraFile, name: String) -> String {
-    if let ext = name.split(separator: ".").last, ext != name {
-        return ext.uppercased()
-    }
-    return file.uti?.uppercased() ?? "UNKNOWN"
-}
-
-private func timestamp(for file: ICCameraFile) -> String? {
-    let date = file.exifCreationDate ?? file.fileCreationDate ?? file.creationDate ?? file.fileModificationDate ?? file.modificationDate
-    guard let date else {
-        return nil
-    }
-    let formatter = ISO8601DateFormatter()
-    formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-    return formatter.string(from: date)
 }
 
 private func parseOptions(_ args: [String]) throws -> Options {

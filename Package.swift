@@ -5,13 +5,20 @@ import PackageDescription
 
 let package = Package(
     name: "iphone-dedupe",
+    platforms: [
+        .macOS(.v13)
+    ],
     targets: [
         .target(
             name: "DeduperCore"
         ),
+        .target(
+            name: "DeviceMediaKit",
+            dependencies: ["DeduperCore"]
+        ),
         .executableTarget(
             name: "iphone-dedupe",
-            dependencies: ["DeduperCore"]
+            dependencies: ["DeduperCore", "DeviceMediaKit"]
         ),
         .testTarget(
             name: "DeduperCoreTests",
