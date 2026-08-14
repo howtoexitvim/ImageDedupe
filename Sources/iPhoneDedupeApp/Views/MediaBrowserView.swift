@@ -112,7 +112,13 @@ struct MediaBrowserView: View {
 
             Divider().frame(height: 24)
 
-            Picker("View", selection: $viewModel.viewMode) {
+            Picker(
+                "View",
+                selection: Binding(
+                    get: { viewModel.viewMode },
+                    set: { viewModel.setViewMode($0) }
+                )
+            ) {
                 Label("List", systemImage: "list.bullet").tag(MediaBrowserViewModel.ViewMode.list)
                 Label("Grid", systemImage: "square.grid.3x3").tag(MediaBrowserViewModel.ViewMode.grid)
             }

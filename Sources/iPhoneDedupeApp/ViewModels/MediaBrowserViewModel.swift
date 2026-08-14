@@ -59,7 +59,19 @@ final class MediaBrowserViewModel: ObservableObject {
     @Published var searchText = ""
     @Published var sortField: MediaSortField = .timestamp
     @Published var sortOrder: DeduperCore.SortOrder = .descending
-    @Published var viewMode: ViewMode = .list
+    @Published private(set) var viewMode: ViewMode = .list
+
+    /// Switches renderer and starts that renderer with clean interaction state.
+    ///
+    /// List focus is row-oriented and Grid focus is two-dimensional, so carrying focus,
+    /// anchor, and action selection across the switch produced selections the user had not
+    /// made in the renderer they were looking at.
+    func setViewMode(_ mode: ViewMode) {
+        guard mode != viewMode else { return }
+        viewMode = mode
+        selection = MediaSelectionState()
+        refreshVisibleOrder()
+    }
     @Published var isInspectorVisible = false
     @Published var displayScale = MediaDisplayScale(rawValue: 1.0)
     @Published var status = "Connect and unlock your iPhone, then scan."
