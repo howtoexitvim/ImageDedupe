@@ -191,6 +191,45 @@ struct MediaTableView: NSViewRepresentable {
             tableView.scrollRowToVisible(row)
         }
 
+        /// Repaints focus and action-selection decoration on the rows that are on screen.
+        ///
+        /// Row views cache their state, so moving focus with the keyboard has to push the
+        /// new values into the live views. Without this the highlight stays on the row
+        /// where the last click happened and the user loses track of focus.
+        func refreshFocusDecoration() {
+            guard let tableView else { return }
+            let isBrowserFocused = viewModel.selection.focusOwner == .mediaBrowser
+            let focusedID = viewModel.selectedItemID
+            let actionSelected = viewModel.selectedActionIDs
+
+            for row in visibleRowRange(in: tableView) {
+                guard items.indices.contains(row),
+                      let rowView = tableView.rowView(atRow: row, makeIfNecessary: false) as? MediaTableRowView else { continue }
+                let id = items[row].id
+                rowView.isFocusedItem = focusedID == id
+                rowView.isActionSelected = actionSelected.contains(id)
+                rowView.isBrowserFocused = isBrowserFocused
+
+                // The checkbox lives in a cell view, so it needs the new value too.
+                if let cell = tableView.view(
+                    atColumn: tableView.column(withIdentifier: MediaTableColumn.selection.userInterfaceIdentifier),
+                    row: row,
+                    makeIfNecessary: false
+                ) as? MediaCheckboxCellView {
+                    cell.setChecked(actionSelected.contains(id))
+                }
+            }
+        }
+
+        private func visibleRowRange(in tableView: NSTableView) -> Range<Int> {
+            let rows = tableView.rows(in: tableView.visibleRect)
+            guard rows.length > 0 else { return 0..<0 }
+            let lower = max(0, rows.location)
+            let upper = min(items.count, rows.location + rows.length)
+            guard lower < upper else { return 0..<0 }
+            return lower..<upper
+        }
+
         // MARK: - NSTableViewDataSource
 
         func numberOfRows(in tableView: NSTableView) -> Int {
@@ -226,6 +265,7 @@ struct MediaTableView: NSViewRepresentable {
                 let item = items[row]
                 rowView.isActionSelected = viewModel.selectedActionIDs.contains(item.id)
                 rowView.isFocusedItem = viewModel.selectedItemID == item.id
+                rowView.isBrowserFocused = viewModel.selection.focusOwner == .mediaBrowser
             }
             return rowView
         }

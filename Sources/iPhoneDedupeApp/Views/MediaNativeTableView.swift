@@ -13,9 +13,38 @@ final class MediaNativeTableView: NSTableView {
 
     override var acceptsFirstResponder: Bool { true }
 
+    /// The sidebar's SwiftUI `List` otherwise keeps first responder after launch, which
+    /// sends the arrow keys to All Media/Duplicates instead of the media rows.
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        guard window != nil else { return }
+        DispatchQueue.main.async { [weak self] in
+            guard let self, let window = self.window else { return }
+            // Only claim focus if nothing more specific already owns it, so this never
+            // steals the search field mid-typing.
+            let responder = window.firstResponder
+            let isTextEditing = responder is NSText || responder is NSTextView
+            if !isTextEditing {
+                window.makeFirstResponder(self)
+            }
+        }
+    }
+
     override func becomeFirstResponder() -> Bool {
         coordinator?.viewModel.setFocusOwner(.mediaBrowser)
+        coordinator?.refreshFocusDecoration()
         return super.becomeFirstResponder()
+    }
+
+    /// Losing first responder must release ownership, otherwise the model keeps claiming
+    /// the media browser has focus while the sidebar or search field is actually driving
+    /// the arrow keys.
+    override func resignFirstResponder() -> Bool {
+        if coordinator?.viewModel.selection.focusOwner == .mediaBrowser {
+            coordinator?.viewModel.setFocusOwner(.none)
+        }
+        coordinator?.refreshFocusDecoration()
+        return super.resignFirstResponder()
     }
 
     // MARK: - Keyboard
@@ -29,6 +58,8 @@ final class MediaNativeTableView: NSTableView {
         let modifiers = MediaTableController.Modifiers(event.modifierFlags)
         if coordinator.controller.handleKey(key, modifiers: modifiers) {
             coordinator.scrollFocusIntoView()
+            // Scrolling can reuse row views, so decoration is refreshed after the scroll.
+            coordinator.refreshFocusDecoration()
             return
         }
         // Unconsumed keys keep their normal AppKit behavior, which is how Enter stays
@@ -61,6 +92,7 @@ final class MediaNativeTableView: NSTableView {
 
         let modifiers = MediaTableController.Modifiers(event.modifierFlags)
         coordinator.controller.click(row: clickedRow, modifiers: modifiers)
+        coordinator.refreshFocusDecoration()
 
         guard !modifiers.contains(.shift) else { return }
         trackDragSelection(startingAt: clickedRow, initialEvent: event)
@@ -83,6 +115,7 @@ final class MediaNativeTableView: NSTableView {
             let point = convert(event.locationInWindow, from: nil)
             let draggedRow = clampedRow(at: point)
             coordinator.controller.updateDrag(toRow: draggedRow)
+            coordinator.refreshFocusDecoration()
             updateAutoScroll(for: event)
         }
 
@@ -162,6 +195,7 @@ final class MediaNativeTableView: NSTableView {
 
         let point = convert(pointInWindow, from: nil)
         coordinator.controller.updateDrag(toRow: clampedRow(at: point))
+        coordinator.refreshFocusDecoration()
     }
 
     private func stopAutoScroll() {
@@ -174,8 +208,19 @@ final class MediaNativeTableView: NSTableView {
 /// be focused without being checked, and checked without being focused.
 @MainActor
 final class MediaTableRowView: NSTableRowView {
-    var isActionSelected = false
-    var isFocusedItem = false
+    var isActionSelected = false {
+        didSet { if isActionSelected != oldValue { needsDisplay = true } }
+    }
+
+    var isFocusedItem = false {
+        didSet { if isFocusedItem != oldValue { needsDisplay = true } }
+    }
+
+    /// Whether the media browser currently owns key input. The focus ring is drawn
+    /// stronger when it does, so the user can tell where the arrow keys will land.
+    var isBrowserFocused = false {
+        didSet { if isBrowserFocused != oldValue { needsDisplay = true } }
+    }
 
     override func drawBackground(in dirtyRect: NSRect) {
         super.drawBackground(in: dirtyRect)
@@ -189,9 +234,11 @@ final class MediaTableRowView: NSTableRowView {
         }
 
         if isFocusedItem {
-            NSColor.controlAccentColor.withAlphaComponent(0.55).setStroke()
-            let outline = NSBezierPath(rect: bounds.insetBy(dx: 0.5, dy: 0.5))
-            outline.lineWidth = 1
+            NSColor.controlAccentColor
+                .withAlphaComponent(isBrowserFocused ? 0.9 : 0.4)
+                .setStroke()
+            let outline = NSBezierPath(rect: bounds.insetBy(dx: 1, dy: 1))
+            outline.lineWidth = isBrowserFocused ? 2 : 1
             outline.stroke()
         }
     }

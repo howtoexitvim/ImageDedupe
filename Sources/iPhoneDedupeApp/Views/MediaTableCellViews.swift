@@ -65,9 +65,14 @@ final class MediaCheckboxCellView: NSTableCellView {
     }
 
     func configure(isChecked: Bool, name: String, onToggle: @escaping () -> Void) {
-        button.state = isChecked ? .on : .off
+        setChecked(isChecked)
         button.setAccessibilityLabel("Select \(name)")
         self.onToggle = onToggle
+    }
+
+    /// Updates only the checked state, for live refreshes that must not rebind the action.
+    func setChecked(_ isChecked: Bool) {
+        button.state = isChecked ? .on : .off
     }
 
     @objc private func toggle() {

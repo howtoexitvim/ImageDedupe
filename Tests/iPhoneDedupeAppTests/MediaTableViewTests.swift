@@ -200,6 +200,58 @@ final class MediaTableViewTests: XCTestCase {
         XCTAssertTrue(viewModel.selectedActionIDs.isEmpty)
     }
 
+    // MARK: - Focus ownership
+
+    /// Regression: arrow keys drove the sidebar because the model still claimed the media
+    /// browser owned focus after the table stopped being first responder.
+    func testReleasingFocusStopsMediaShortcuts() {
+        let viewModel = viewModel()
+        let controller = MediaTableController(viewModel: viewModel)
+        viewModel.select(item("b"))
+
+        viewModel.setFocusOwner(.none)
+
+        XCTAssertFalse(controller.handleKey(.down, modifiers: []))
+        XCTAssertFalse(controller.handleKey(.space, modifiers: []))
+        XCTAssertEqual(viewModel.selectedItemID, "b", "focus should be kept, just not driven")
+    }
+
+    func testRegainingFocusResumesMediaShortcuts() {
+        let viewModel = viewModel()
+        let controller = MediaTableController(viewModel: viewModel)
+        viewModel.select(item("b"))
+        viewModel.setFocusOwner(.none)
+        viewModel.setFocusOwner(.mediaBrowser)
+
+        XCTAssertTrue(controller.handleKey(.down, modifiers: []))
+        XCTAssertEqual(viewModel.selectedItemID, "c")
+    }
+
+    /// Regression: the focus highlight stayed on the last clicked row because keyboard
+    /// movement never told the row views to redraw.
+    func testFocusMovesToTheNextRowSoDecorationCanFollow() {
+        let viewModel = viewModel()
+        let controller = MediaTableController(viewModel: viewModel)
+        viewModel.select(item("a"))
+        XCTAssertEqual(controller.row(for: viewModel.selectedItemID!), 0)
+
+        controller.handleKey(.down, modifiers: [])
+        XCTAssertEqual(controller.row(for: viewModel.selectedItemID!), 1)
+
+        controller.handleKey(.down, modifiers: [])
+        XCTAssertEqual(controller.row(for: viewModel.selectedItemID!), 2)
+    }
+
+    func testClickMovesFocusToTheClickedRow() {
+        let viewModel = viewModel()
+        let controller = MediaTableController(viewModel: viewModel)
+
+        controller.click(row: 3, modifiers: [])
+
+        XCTAssertEqual(viewModel.selectedItemID, "d")
+        XCTAssertTrue(viewModel.selectedActionIDs.isEmpty, "a plain click must not check the row")
+    }
+
     // MARK: - Destructive confirmation gate
 
     func testDeleteRequestOnlyRaisesConfirmation() {
