@@ -127,16 +127,12 @@ struct MediaBrowserView: View {
             HStack(spacing: 6) {
                 Image(systemName: "magnifyingglass")
                     .foregroundStyle(.secondary)
-                TextField("Search name, kind, size:>2mb, duration:<10s", text: $viewModel.searchText)
-                    .textFieldStyle(.plain)
+                NativeSearchField(
+                    text: $viewModel.searchText,
+                    placeholder: "name, kind:heic, size:>2mb, duration:<10s"
+                )
             }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 6)
-            .background(Color(nsColor: .textBackgroundColor), in: RoundedRectangle(cornerRadius: 6))
-            .overlay(
-                RoundedRectangle(cornerRadius: 6)
-                    .stroke(Color(nsColor: .separatorColor).opacity(0.7), lineWidth: 1)
-            )
+            .frame(height: 28)
             .frame(minWidth: 260, idealWidth: 420, maxWidth: 520)
             .help("Smart search: plain text or tokens like kind:heic size:>2mb duration:<10s")
 

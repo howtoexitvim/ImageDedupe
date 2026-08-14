@@ -10,4 +10,6 @@ DerivedData/
 # Generated outputs and local device scan artifacts
 /Outputs/iphone-dedupe
 /Outputs/*.csv
+/outputs/iphone-dedupe
+/outputs/*.csv
 /iphone-dedupe-*.csv

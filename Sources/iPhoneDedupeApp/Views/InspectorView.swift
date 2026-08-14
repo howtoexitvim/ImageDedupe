@@ -90,7 +90,7 @@ struct InspectorView: View {
                 row("Rule", "name-kind-size")
                 row("Duplicate candidates", "\(viewModel.duplicatePlan.delete.count)")
                 row("Estimated space", ByteCountFormatter.string(fromByteCount: viewModel.duplicateBytes, countStyle: .file))
-                Text("Deletion is disabled in v0.1 UI.")
+                Text("Deletion requires explicit confirmation.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }

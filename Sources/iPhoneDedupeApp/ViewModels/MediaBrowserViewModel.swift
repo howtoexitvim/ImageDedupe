@@ -31,7 +31,6 @@ final class MediaBrowserViewModel: ObservableObject {
     @Published var selectedActionIDs: Set<String> = []
     @Published var reviewScope: MediaReviewScope = .allMedia
     @Published var searchText = ""
-    @Published var selectedKind = "All"
     @Published var sortField: MediaSortField = .timestamp
     @Published var sortOrder: DeduperCore.SortOrder = .descending
     @Published var viewMode: ViewMode = .list
@@ -53,26 +52,18 @@ final class MediaBrowserViewModel: ObservableObject {
     private var metadataAccessOrder: [String] = []
     private let maxCachedMetadataSummaries = 768
 
-    var kinds: [String] {
-        let values = Set(allItems.map { $0.model.kind.uppercased() })
-        return ["All"] + values.sorted()
-    }
-
     var filteredItems: [MediaItem] {
         let scopedModels = reviewScope.apply(to: allItems.map(\.model), duplicatePlan: duplicatePlan)
         let scopedIDs = Set(scopedModels.map(\.id))
         let scopedItems = allItems.filter { scopedIDs.contains($0.id) }
-        var filters: [MediaFilter] = []
         let smartSearch = MediaSearchQuery(searchText)
-        if selectedKind != "All" {
-            filters.append(.kindIn([selectedKind]))
-        }
+        let searchedItems = scopedItems.filter { smartSearch.matches($0.model) }
         let query = MediaQuery(
-            filters: filters,
+            filters: [],
             sort: MediaSortDescriptor(field: sortField, order: sortOrder)
         )
-        let filteredModels = query.apply(to: scopedItems.map(\.model)).filter { smartSearch.matches($0) }
-        let itemByID = Dictionary(uniqueKeysWithValues: scopedItems.map { ($0.id, $0) })
+        let filteredModels = query.apply(to: searchedItems.map(\.model))
+        let itemByID = Dictionary(uniqueKeysWithValues: searchedItems.map { ($0.id, $0) })
         return filteredModels.compactMap { itemByID[$0.id] }
     }
 
