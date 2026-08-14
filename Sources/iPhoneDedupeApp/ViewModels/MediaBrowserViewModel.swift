@@ -28,6 +28,7 @@ final class MediaBrowserViewModel: ObservableObject {
     @Published var deviceName = "No Device"
     @Published var allItems: [MediaItem] = []
     @Published var selectedItemID: String?
+    @Published var reviewScope: MediaReviewScope = .allMedia
     @Published var searchText = ""
     @Published var selectedKind = "All"
     @Published var sortField: MediaSortField = .timestamp
@@ -39,12 +40,19 @@ final class MediaBrowserViewModel: ObservableObject {
     @Published var thumbnailCache: [String: NSImage] = [:]
     @Published var duplicatePlan = DuplicatePlan(keep: [], delete: [])
 
+    private var thumbnailIDsInFlight = Set<String>()
+    private var thumbnailAccessOrder: [String] = []
+    private let maxCachedThumbnails = 512
+
     var kinds: [String] {
         let values = Set(allItems.map { $0.model.kind.uppercased() })
         return ["All"] + values.sorted()
     }
 
     var filteredItems: [MediaItem] {
+        let scopedModels = reviewScope.apply(to: allItems.map(\.model), duplicatePlan: duplicatePlan)
+        let scopedIDs = Set(scopedModels.map(\.id))
+        let scopedItems = allItems.filter { scopedIDs.contains($0.id) }
         var filters: [MediaFilter] = []
         if !searchText.isEmpty {
             filters.append(.nameContains(searchText))
@@ -56,16 +64,14 @@ final class MediaBrowserViewModel: ObservableObject {
             filters: filters,
             sort: MediaSortDescriptor(field: sortField, order: sortOrder)
         )
-        let filteredModels = query.apply(to: allItems.map(\.model))
-        let itemByID = Dictionary(uniqueKeysWithValues: allItems.map { ($0.id, $0) })
+        let filteredModels = query.apply(to: scopedItems.map(\.model))
+        let itemByID = Dictionary(uniqueKeysWithValues: scopedItems.map { ($0.id, $0) })
         return filteredModels.compactMap { itemByID[$0.id] }
     }
 
     var selectedItem: MediaItem? {
-        guard let selectedItemID else {
-            return filteredItems.first
-        }
-        return allItems.first { $0.id == selectedItemID }
+        guard let selectedItemID else { return nil }
+        return filteredItems.first { $0.id == selectedItemID }
     }
 
     var duplicateDeleteIDs: Set<String> {
@@ -105,11 +111,22 @@ final class MediaBrowserViewModel: ObservableObject {
         loadThumbnails(for: [item])
     }
 
+    func selectReviewScope(_ scope: MediaReviewScope) {
+        reviewScope = scope
+        if let selectedItemID,
+           !filteredItems.contains(where: { $0.id == selectedItemID }) {
+            self.selectedItemID = nil
+        }
+    }
+
     func loadThumbnails(for items: [MediaItem]) {
-        let missing = items.filter { thumbnailCache[$0.id] == nil }
+        let missing = items.filter { item in
+            thumbnailCache[item.id] == nil && !thumbnailIDsInFlight.contains(item.id)
+        }
         guard !missing.isEmpty else {
             return
         }
+        thumbnailIDsInFlight.formUnion(missing.map(\.id))
 
         Task.detached(priority: .utility) { [weak self] in
             guard let self else {
@@ -123,10 +140,11 @@ final class MediaBrowserViewModel: ObservableObject {
                 loaded.append((id: item.id, image: image))
             }
             guard !loaded.isEmpty else {
+                await self.finishThumbnailRequests(ids: missing.map(\.id))
                 return
             }
             try? await Task.sleep(nanoseconds: 250_000_000)
-            await self.cacheThumbnails(loaded)
+            await self.cacheThumbnails(loaded, completedIDs: missing.map(\.id))
         }
     }
 
@@ -155,9 +173,26 @@ final class MediaBrowserViewModel: ObservableObject {
         }
     }
 
-    private func cacheThumbnails(_ images: [(id: String, image: NSImage)]) {
+    private func cacheThumbnails(_ images: [(id: String, image: NSImage)], completedIDs: [String]) {
         for image in images {
             thumbnailCache[image.id] = image.image
+            thumbnailAccessOrder.removeAll { $0 == image.id }
+            thumbnailAccessOrder.append(image.id)
+        }
+        finishThumbnailRequests(ids: completedIDs)
+        trimThumbnailCacheIfNeeded()
+    }
+
+    private func finishThumbnailRequests(ids: [String]) {
+        for id in ids {
+            thumbnailIDsInFlight.remove(id)
+        }
+    }
+
+    private func trimThumbnailCacheIfNeeded() {
+        while thumbnailAccessOrder.count > maxCachedThumbnails {
+            let id = thumbnailAccessOrder.removeFirst()
+            thumbnailCache.removeValue(forKey: id)
         }
     }
 }

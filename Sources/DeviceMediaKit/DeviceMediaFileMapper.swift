@@ -12,7 +12,14 @@ public enum DeviceMediaFileMapper {
             size: Int64(file.fileSize),
             timestamp: timestamp(for: file),
             width: file.width > 0 ? file.width : nil,
-            height: file.height > 0 ? file.height : nil
+            height: file.height > 0 ? file.height : nil,
+            duration: file.duration > 0 ? file.duration : nil,
+            location: file.gpsString,
+            groupUUID: file.groupUUID,
+            burstUUID: file.burstUUID,
+            isRaw: file.isRaw,
+            isHighFramerate: file.highFramerate,
+            isTimeLapse: file.timeLapse
         )
     }
 

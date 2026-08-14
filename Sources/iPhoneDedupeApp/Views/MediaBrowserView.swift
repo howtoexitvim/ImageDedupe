@@ -3,7 +3,14 @@ import SwiftUI
 
 struct MediaBrowserView: View {
     @StateObject private var viewModel = MediaBrowserViewModel()
+    @State private var sidebarSelection: SidebarItem = .allMedia
     private let autoScanOnLaunch: Bool
+
+    private enum SidebarItem: String, Hashable {
+        case device
+        case allMedia
+        case duplicates
+    }
 
     init(autoScanOnLaunch: Bool = false) {
         self.autoScanOnLaunch = autoScanOnLaunch
@@ -39,21 +46,31 @@ struct MediaBrowserView: View {
     }
 
     private var sidebar: some View {
-        List(selection: .constant("iphone")) {
+        List(selection: $sidebarSelection) {
             Section("Devices") {
                 Label(viewModel.deviceName, systemImage: "iphone")
                     .lineLimit(1)
-                    .tag("iphone")
+                    .tag(SidebarItem.device)
             }
             Section("Review") {
                 Label("All Media", systemImage: "photo.on.rectangle")
                     .lineLimit(1)
+                    .tag(SidebarItem.allMedia)
                 Label("Duplicates", systemImage: "rectangle.on.rectangle")
                     .lineLimit(1)
                     .badge(viewModel.duplicatePlan.delete.count)
+                    .tag(SidebarItem.duplicates)
             }
         }
         .listStyle(.sidebar)
+        .onChange(of: sidebarSelection) { selection in
+            switch selection {
+            case .device, .allMedia:
+                viewModel.selectReviewScope(.allMedia)
+            case .duplicates:
+                viewModel.selectReviewScope(.duplicates)
+            }
+        }
         .safeAreaInset(edge: .bottom) {
             Button {
                 viewModel.scan()

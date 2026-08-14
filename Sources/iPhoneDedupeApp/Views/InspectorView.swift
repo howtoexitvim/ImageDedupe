@@ -72,6 +72,13 @@ struct InspectorView: View {
                 row("Timestamp", item.model.timestamp ?? "Unknown")
                 row("Width", item.model.width.map(String.init) ?? "Unknown")
                 row("Height", item.model.height.map(String.init) ?? "Unknown")
+                row("Location", item.model.location ?? "Unknown")
+                row("Duration", durationText(item.model.duration))
+                row("RAW", item.model.isRaw ? "Yes" : "No")
+                row("High FPS", item.model.isHighFramerate ? "Yes" : "No")
+                row("Time Lapse", item.model.isTimeLapse ? "Yes" : "No")
+                row("Group UUID", item.model.groupUUID ?? "Unknown")
+                row("Burst UUID", item.model.burstUUID ?? "Unknown")
             }
             Section("Duplicate Dry Run") {
                 row("Rule", "name-kind-size")
@@ -94,5 +101,15 @@ struct InspectorView: View {
                 .multilineTextAlignment(.trailing)
                 .lineLimit(2)
         }
+    }
+
+    private func durationText(_ duration: Double?) -> String {
+        guard let duration else {
+            return "Unknown"
+        }
+        let totalSeconds = Int(duration.rounded())
+        let minutes = totalSeconds / 60
+        let seconds = totalSeconds % 60
+        return "\(minutes):\(String(format: "%02d", seconds))"
     }
 }

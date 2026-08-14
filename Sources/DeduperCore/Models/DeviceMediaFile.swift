@@ -6,6 +6,13 @@ public struct DeviceMediaFile: Equatable, Sendable {
     public let timestamp: String?
     public let width: Int?
     public let height: Int?
+    public let duration: Double?
+    public let location: String?
+    public let groupUUID: String?
+    public let burstUUID: String?
+    public let isRaw: Bool
+    public let isHighFramerate: Bool
+    public let isTimeLapse: Bool
 
     public init(
         id: String,
@@ -14,7 +21,14 @@ public struct DeviceMediaFile: Equatable, Sendable {
         size: Int64,
         timestamp: String?,
         width: Int?,
-        height: Int?
+        height: Int?,
+        duration: Double? = nil,
+        location: String? = nil,
+        groupUUID: String? = nil,
+        burstUUID: String? = nil,
+        isRaw: Bool = false,
+        isHighFramerate: Bool = false,
+        isTimeLapse: Bool = false
     ) {
         self.id = id
         self.name = name
@@ -23,5 +37,12 @@ public struct DeviceMediaFile: Equatable, Sendable {
         self.timestamp = timestamp
         self.width = width
         self.height = height
+        self.duration = duration
+        self.location = location
+        self.groupUUID = groupUUID
+        self.burstUUID = burstUUID
+        self.isRaw = isRaw
+        self.isHighFramerate = isHighFramerate
+        self.isTimeLapse = isTimeLapse
     }
 }

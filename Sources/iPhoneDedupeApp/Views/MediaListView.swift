@@ -7,7 +7,7 @@ struct MediaListView: View {
         VStack(spacing: 0) {
             header
             Divider()
-            ScrollView {
+            ScrollView([.vertical, .horizontal]) {
                 LazyVStack(spacing: 0) {
                     ForEach(Array(viewModel.filteredItems.enumerated()), id: \.element.id) { index, item in
                         row(for: item, index: index)
@@ -15,6 +15,7 @@ struct MediaListView: View {
                             .onAppear { viewModel.loadThumbnails(for: [item]) }
                     }
                 }
+                .frame(minWidth: 1180, alignment: .leading)
             }
         }
     }
@@ -24,16 +25,25 @@ struct MediaListView: View {
             Spacer()
                 .frame(width: viewModel.displayScale.listThumbnailSide + 8)
             headerText("Name")
-                .frame(maxWidth: .infinity, alignment: .leading)
+                .frame(width: 360, alignment: .leading)
             headerText("Kind")
                 .frame(width: 72, alignment: .leading)
             headerText("Date")
                 .frame(width: 190, alignment: .leading)
             headerText("Size")
                 .frame(width: 96, alignment: .trailing)
+            headerText("Width")
+                .frame(width: 70, alignment: .trailing)
+            headerText("Height")
+                .frame(width: 70, alignment: .trailing)
+            headerText("Location")
+                .frame(width: 180, alignment: .leading)
+            headerText("Duration")
+                .frame(width: 84, alignment: .trailing)
         }
         .padding(.horizontal, 12)
         .frame(height: 34)
+        .frame(minWidth: 1180, alignment: .leading)
         .background(Color(nsColor: .controlBackgroundColor))
     }
 
@@ -54,7 +64,7 @@ struct MediaListView: View {
                         .background(Color.orange, in: RoundedRectangle(cornerRadius: 4))
                 }
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
+            .frame(width: 360, alignment: .leading)
 
             Text(item.model.kind)
                 .lineLimit(1)
@@ -68,10 +78,31 @@ struct MediaListView: View {
             Text(ByteCountFormatter.string(fromByteCount: item.model.size, countStyle: .file))
                 .lineLimit(1)
                 .frame(width: 96, alignment: .trailing)
+
+            Text(item.model.width.map(String.init) ?? "")
+                .lineLimit(1)
+                .foregroundStyle(.secondary)
+                .frame(width: 70, alignment: .trailing)
+
+            Text(item.model.height.map(String.init) ?? "")
+                .lineLimit(1)
+                .foregroundStyle(.secondary)
+                .frame(width: 70, alignment: .trailing)
+
+            Text(item.model.location ?? "")
+                .lineLimit(1)
+                .foregroundStyle(.secondary)
+                .frame(width: 180, alignment: .leading)
+
+            Text(durationText(item.model.duration))
+                .lineLimit(1)
+                .foregroundStyle(.secondary)
+                .frame(width: 84, alignment: .trailing)
         }
         .font(.callout)
         .padding(.horizontal, 12)
         .frame(height: max(34, viewModel.displayScale.listThumbnailSide + 10))
+        .frame(minWidth: 1180, alignment: .leading)
         .background(rowBackground(for: item, index: index))
     }
 
@@ -87,6 +118,16 @@ struct MediaListView: View {
             return Color.accentColor.opacity(0.18)
         }
         return index.isMultiple(of: 2) ? Color.clear : Color.secondary.opacity(0.06)
+    }
+
+    private func durationText(_ duration: Double?) -> String {
+        guard let duration else {
+            return ""
+        }
+        let totalSeconds = Int(duration.rounded())
+        let minutes = totalSeconds / 60
+        let seconds = totalSeconds % 60
+        return "\(minutes):\(String(format: "%02d", seconds))"
     }
 }
 

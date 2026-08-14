@@ -16,10 +16,13 @@ public final class DeviceSessionController: NSObject, ICDeviceBrowserDelegate, I
         self.timeoutSeconds = timeoutSeconds
         super.init()
         browser.delegate = self
-        browser.browsedDeviceTypeMask = ICDeviceTypeMask(rawValue: ICDeviceTypeMask.camera.rawValue | ICDeviceLocationTypeMask.local.rawValue)!
     }
 
     public func scan() throws -> DeviceScanResult {
+        guard let deviceMask = ICDeviceTypeMask(rawValue: ICDeviceTypeMask.camera.rawValue | ICDeviceLocationTypeMask.local.rawValue) else {
+            throw DeviceMediaError.invalidDeviceBrowserMask
+        }
+        browser.browsedDeviceTypeMask = deviceMask
         browser.start()
         defer { browser.stop() }
 
