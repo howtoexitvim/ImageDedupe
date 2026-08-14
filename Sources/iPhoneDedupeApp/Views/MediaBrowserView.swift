@@ -205,8 +205,9 @@ struct MediaBrowserView: View {
                 .lineLimit(1)
             Text("\(viewModel.filteredItems.count) shown / \(viewModel.allItems.count) total")
                 .lineLimit(1)
-            Text("Would delete \(viewModel.duplicatePlan.delete.count)")
+            Text("Duplicate candidates \(viewModel.duplicatePlan.delete.count)")
                 .lineLimit(1)
+                .help("Conservative duplicate candidates under the current name-kind-size rule.")
         }
         .font(.caption)
         .foregroundStyle(.secondary)

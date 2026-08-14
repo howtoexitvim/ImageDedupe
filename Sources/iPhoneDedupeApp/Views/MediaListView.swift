@@ -85,18 +85,20 @@ struct MediaListView: View {
                     Image(systemName: viewModel.sortOrder == .ascending ? "chevron.up" : "chevron.down")
                         .font(.caption2)
                 }
+                Image(systemName: "line.3.horizontal")
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
             }
             .foregroundStyle(column.sortField == nil ? .secondary : .primary)
             .frame(width: column.width, alignment: column.alignment)
         }
         .buttonStyle(.plain)
-        .disabled(column.sortField == nil)
         .onDrag {
             draggedColumn = column
             return NSItemProvider(object: column.rawValue as NSString)
         }
         .onDrop(of: [.text], delegate: ColumnDropDelegate(target: column, columns: $columns, draggedColumn: $draggedColumn))
-        .help(column.sortField == nil ? "Metadata column" : "Sort by \(column.title). Drag to reorder columns.")
+        .help(column.sortField == nil ? "Drag to reorder columns." : "Sort by \(column.title). Drag to reorder columns.")
     }
 
     private func row(for item: MediaBrowserViewModel.MediaItem, index: Int) -> some View {
@@ -113,7 +115,11 @@ struct MediaListView: View {
             .buttonStyle(.plain)
             .frame(width: 26)
 
-            ThumbnailCell(image: viewModel.thumbnailCache[item.id], side: viewModel.displayScale.listThumbnailSide)
+            ThumbnailCell(
+                image: viewModel.thumbnailCache[item.id],
+                side: viewModel.displayScale.listThumbnailSide,
+                isImported: viewModel.importedItemIDs.contains(item.id)
+            )
                 .frame(width: viewModel.displayScale.listThumbnailSide + 8)
 
             ForEach(columns) { column in
@@ -296,9 +302,10 @@ private struct ColumnDropDelegate: DropDelegate {
 struct ThumbnailCell: View {
     let image: NSImage?
     let side: Double
+    let isImported: Bool
 
     var body: some View {
-        Group {
+        ZStack(alignment: .bottomTrailing) {
             if let image {
                 Image(nsImage: image)
                     .resizable()
@@ -307,9 +314,23 @@ struct ThumbnailCell: View {
                 Image(systemName: "photo")
                     .foregroundStyle(.secondary)
             }
+            if isImported {
+                ImportedBadge()
+                    .offset(x: 3, y: 3)
+            }
         }
         .frame(width: side, height: side)
         .background(Color.secondary.opacity(0.08))
         .clipShape(RoundedRectangle(cornerRadius: 3))
+    }
+}
+
+struct ImportedBadge: View {
+    var body: some View {
+        Image(systemName: "checkmark.circle.fill")
+            .font(.system(size: 14, weight: .semibold))
+            .foregroundStyle(.white, Color.green)
+            .shadow(radius: 1)
+            .help("Imported")
     }
 }

@@ -31,6 +31,9 @@ struct MediaGridView: View {
                                     Image(systemName: "exclamationmark.triangle.fill")
                                         .foregroundStyle(.orange)
                                 }
+                                if viewModel.importedItemIDs.contains(item.id) {
+                                    ImportedBadge()
+                                }
                                 Button {
                                     viewModel.toggleActionSelection(item)
                                 } label: {

@@ -88,7 +88,7 @@ struct InspectorView: View {
             }
             Section("Duplicate Dry Run") {
                 row("Rule", "name-kind-size")
-                row("Would delete", "\(viewModel.duplicatePlan.delete.count)")
+                row("Duplicate candidates", "\(viewModel.duplicatePlan.delete.count)")
                 row("Estimated space", ByteCountFormatter.string(fromByteCount: viewModel.duplicateBytes, countStyle: .file))
                 Text("Deletion is disabled in v0.1 UI.")
                     .font(.caption)

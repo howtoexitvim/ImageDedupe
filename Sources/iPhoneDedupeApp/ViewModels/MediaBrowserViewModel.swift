@@ -41,6 +41,7 @@ final class MediaBrowserViewModel: ObservableObject {
     @Published var isScanning = false
     @Published var thumbnailCache: [String: NSImage] = [:]
     @Published var metadataCache: [String: MediaMetadataSummary] = [:]
+    @Published var importedItemIDs: Set<String> = []
     @Published var duplicatePlan = DuplicatePlan(keep: [], delete: [])
     @Published var importDestination = FileManager.default.urls(for: .picturesDirectory, in: .userDomainMask).first ?? URL(fileURLWithPath: NSHomeDirectory())
     @Published var lastImportedFileURL: URL?
@@ -172,7 +173,7 @@ final class MediaBrowserViewModel: ObservableObject {
         Task.detached(priority: .userInitiated) { [weak self, destination = importDestination] in
             guard let self else { return }
             let summary = DeviceImportController(timeoutSeconds: 120).importFiles(items.map(\.cameraFile), to: destination)
-            await self.applyImportSummary(summary, destination: destination)
+            await self.applyImportSummary(summary, destination: destination, requestedItems: items)
         }
     }
 
@@ -269,6 +270,7 @@ final class MediaBrowserViewModel: ObservableObject {
         duplicatePlan = payload.plan
         selectedItemID = nil
         selectedActionIDs.removeAll()
+        importedItemIDs.removeAll()
         status = "Scanned \(payload.items.count) items. Conservative duplicates: \(payload.plan.delete.count)."
         fputs("ui-scan-succeeded: scanned=\(payload.items.count) duplicates=\(payload.plan.delete.count)\n", stderr)
         isScanning = false
@@ -327,10 +329,15 @@ final class MediaBrowserViewModel: ObservableObject {
         trimMetadataCacheIfNeeded()
     }
 
-    private func applyImportSummary(_ summary: DeviceImportSummary, destination: URL) {
+    private func applyImportSummary(_ summary: DeviceImportSummary, destination: URL, requestedItems: [MediaItem]) {
         if let filename = summary.successful.last?.filename {
             lastImportedFileURL = destination.appendingPathComponent(filename)
         }
+        let successfulHandles = Set(summary.successful.map(\.file.ptpObjectHandle))
+        let successfulIDs = requestedItems
+            .filter { successfulHandles.contains($0.cameraFile.ptpObjectHandle) }
+            .map(\.id)
+        importedItemIDs.formUnion(successfulIDs)
         status = "Imported \(summary.successful.count) item(s), \(summary.failed.count) failed."
     }
 
