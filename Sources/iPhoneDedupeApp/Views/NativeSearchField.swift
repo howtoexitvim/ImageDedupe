@@ -5,8 +5,14 @@ struct NativeSearchField: NSViewRepresentable {
     @Binding var text: String
     let placeholder: String
 
+    /// Called when the field gains or loses first responder, so the shared selection model
+    /// knows whether the search field owns key input. Without this, media shortcuts would
+    /// be blocked only as a side effect of the browser resigning focus, which is fragile.
+    var onFocusChange: ((Bool) -> Void)?
+
     func makeNSView(context: Context) -> NSSearchField {
         let searchField = FocusableSearchField()
+        searchField.onFocusChange = onFocusChange
         searchField.placeholderString = placeholder
         searchField.delegate = context.coordinator
         searchField.sendsSearchStringImmediately = true
@@ -48,8 +54,26 @@ struct NativeSearchField: NSViewRepresentable {
 }
 
 private final class FocusableSearchField: NSSearchField {
+    var onFocusChange: ((Bool) -> Void)?
+
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool {
         true
+    }
+
+    override func becomeFirstResponder() -> Bool {
+        let accepted = super.becomeFirstResponder()
+        if accepted {
+            onFocusChange?(true)
+        }
+        return accepted
+    }
+
+    override func resignFirstResponder() -> Bool {
+        let resigned = super.resignFirstResponder()
+        if resigned {
+            onFocusChange?(false)
+        }
+        return resigned
     }
 
     override func mouseDown(with event: NSEvent) {
