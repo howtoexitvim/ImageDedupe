@@ -48,6 +48,10 @@ final class MediaBrowserViewModel: ObservableObject {
         selection.actionSelectedIDs
     }
 
+    /// Set when a renderer asks for the destructive confirmation sheet. The delete itself
+    /// still only runs from the confirmed action, never from this flag.
+    @Published var isConfirmingDelete = false
+
     @Published var reviewScope: MediaReviewScope = .allMedia
     @Published var searchText = ""
     @Published var sortField: MediaSortField = .timestamp
@@ -144,6 +148,31 @@ final class MediaBrowserViewModel: ObservableObject {
         isInspectorVisible = true
         loadThumbnails(for: [item])
         loadMetadata(for: item)
+    }
+
+    /// Focus by ID, used by native renderers that work in rows/indexes rather than items.
+    func selectItem(withID id: String) {
+        guard let item = allItems.first(where: { $0.id == id }) else { return }
+        select(item)
+    }
+
+    /// Shift-click: extends the action selection from the stable anchor.
+    func extendSelection(to id: String) {
+        refreshVisibleOrder()
+        selection.extendSelection(to: id)
+    }
+
+    func beginDragSelection(at id: String) {
+        refreshVisibleOrder()
+        selection.beginDragSelection(at: id)
+    }
+
+    func updateDragSelection(to id: String) {
+        selection.updateDragSelection(to: id)
+    }
+
+    func endDragSelection() {
+        selection.endDragSelection()
     }
 
     /// Arrow-key focus movement. Returns the ID the renderer should scroll into view.
@@ -252,6 +281,15 @@ final class MediaBrowserViewModel: ObservableObject {
                 await self.applyDeleteFailure("\(error)")
             }
         }
+    }
+
+    /// Requests the destructive confirmation sheet. Does not delete anything.
+    func requestDeleteConfirmation() {
+        guard !selectedActionIDs.isEmpty else {
+            status = "Select one or more items to delete."
+            return
+        }
+        isConfirmingDelete = true
     }
 
     func revealLastImportInFinder() {

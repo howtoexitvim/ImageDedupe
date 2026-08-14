@@ -5,7 +5,6 @@ import SwiftUI
 struct MediaBrowserView: View {
     @StateObject private var viewModel = MediaBrowserViewModel()
     @State private var sidebarSelection: SidebarItem = .allMedia
-    @State private var isConfirmingDelete = false
     private let autoScanOnLaunch: Bool
 
     private enum SidebarItem: String, Hashable {
@@ -183,7 +182,7 @@ struct MediaBrowserView: View {
             .help("Reveal last imported file in Finder")
 
             Button("Delete") {
-                isConfirmingDelete = true
+                viewModel.requestDeleteConfirmation()
             }
             .disabled(viewModel.selectedActionIDs.isEmpty)
 
@@ -207,7 +206,7 @@ struct MediaBrowserView: View {
         .padding(.vertical, 6)
         .confirmationDialog(
             "Delete \(viewModel.selectedActionIDs.count) item(s) from this iPhone?",
-            isPresented: $isConfirmingDelete,
+            isPresented: $viewModel.isConfirmingDelete,
             titleVisibility: .visible
         ) {
             Button("Delete From Device", role: .destructive) {
