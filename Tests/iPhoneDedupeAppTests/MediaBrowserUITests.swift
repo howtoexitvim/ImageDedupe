@@ -26,7 +26,19 @@ final class MediaBrowserUITests: XCTestCase {
         XCTAssertEqual(MediaListLayout.contentWidth(viewportWidth: 1_200), 1_200)
     }
 
+    /// The List's minimum width is now the sum of its native columns, not a hard-coded
+    /// 820 pt fallback. A narrow viewport scrolls horizontally instead of compressing.
     func testListContentKeepsOverflowWidthInNarrowViewport() {
-        XCTAssertEqual(MediaListLayout.contentWidth(viewportWidth: 700), 820)
+        XCTAssertEqual(
+            MediaListLayout.contentWidth(viewportWidth: 200),
+            MediaListLayout.minimumContentWidth
+        )
+    }
+
+    func testListMinimumWidthComesFromColumnsOnly() {
+        XCTAssertEqual(
+            MediaListLayout.minimumContentWidth,
+            Double(MediaTableColumn.totalDefaultWidth)
+        )
     }
 }
