@@ -4,30 +4,21 @@ import SwiftUI
 
 struct MediaListView: View {
     @ObservedObject var viewModel: MediaBrowserViewModel
-    @State private var columns = MediaListColumn.defaultOrder
-    @State private var draggedColumn: MediaListColumn?
     @State private var isConfirmingDelete = false
 
-    private var tableWidth: Double {
-        92 + columns.reduce(0) { $0 + $1.width + 12 } + 24
-    }
-
     var body: some View {
-        ScrollView(.horizontal) {
-            VStack(spacing: 0) {
-                header
-                Divider()
-                ScrollView(.vertical) {
-                    LazyVStack(spacing: 0) {
-                        ForEach(Array(viewModel.filteredItems.enumerated()), id: \.element.id) { index, item in
-                            row(for: item, index: index)
-                                .onTapGesture { viewModel.select(item) }
-                                .onAppear { viewModel.loadVisibleDetails(for: item) }
-                        }
+        VStack(spacing: 0) {
+            header
+            Divider()
+            ScrollView(.vertical) {
+                LazyVStack(spacing: 0) {
+                    ForEach(Array(viewModel.filteredItems.enumerated()), id: \.element.id) { index, item in
+                        row(for: item, index: index)
+                            .onTapGesture { viewModel.select(item) }
+                            .onAppear { viewModel.loadVisibleDetails(for: item) }
                     }
                 }
             }
-            .frame(width: tableWidth, alignment: .leading)
         }
         .confirmationDialog(
             "Delete \(viewModel.selectedActionIDs.count) item(s) from this iPhone?",
@@ -60,49 +51,42 @@ struct MediaListView: View {
             Spacer()
                 .frame(width: viewModel.displayScale.listThumbnailSide + 8)
 
-            ForEach(columns) { column in
-                headerCell(for: column)
-            }
+            headerCell("Name", field: .name)
+                .frame(minWidth: 140, maxWidth: .infinity, alignment: .leading)
+            headerCell("Kind", field: .kind)
+                .frame(width: 54, alignment: .leading)
+            headerCell("Date", field: .timestamp)
+                .frame(width: 190, alignment: .leading)
+            headerCell("File Size", field: .size)
+                .frame(width: 86, alignment: .trailing)
+            headerCell("Duration", field: .duration)
+                .frame(width: 72, alignment: .trailing)
         }
         .padding(.horizontal, 12)
         .frame(height: 34)
-        .frame(width: tableWidth, alignment: .leading)
         .background(Color(nsColor: .controlBackgroundColor))
     }
 
-    private func headerCell(for column: MediaListColumn) -> some View {
+    private func headerCell(_ title: String, field: MediaSortField) -> some View {
         Button {
-            if let sortField = column.sortField {
-                viewModel.toggleSort(sortField)
-            }
+            viewModel.toggleSort(field)
         } label: {
             HStack(spacing: 4) {
-                Text(column.title)
+                Text(title)
                     .font(.caption)
                     .fontWeight(.semibold)
                     .lineLimit(1)
-                if column.sortField == viewModel.sortField {
+                if field == viewModel.sortField {
                     Image(systemName: viewModel.sortOrder == .ascending ? "chevron.up" : "chevron.down")
                         .font(.caption2)
                 }
-                Image(systemName: "line.3.horizontal")
-                    .font(.caption2)
-                    .foregroundStyle(.tertiary)
             }
-            .foregroundStyle(column.sortField == nil ? .secondary : .primary)
-            .frame(width: column.width, alignment: column.alignment)
         }
         .buttonStyle(.plain)
-        .onDrag {
-            draggedColumn = column
-            return NSItemProvider(object: column.rawValue as NSString)
-        }
-        .onDrop(of: [.text], delegate: ColumnDropDelegate(target: column, columns: $columns, draggedColumn: $draggedColumn))
-        .help(column.sortField == nil ? "Drag to reorder columns." : "Sort by \(column.title). Drag to reorder columns.")
+        .help("Sort by \(title)")
     }
 
     private func row(for item: MediaBrowserViewModel.MediaItem, index: Int) -> some View {
-        let metadata = viewModel.metadataSummary(for: item)
         let isActionSelected = viewModel.selectedActionIDs.contains(item.id)
 
         return HStack(spacing: 12) {
@@ -120,17 +104,22 @@ struct MediaListView: View {
                 side: viewModel.displayScale.listThumbnailSide,
                 isImported: viewModel.importedItemIDs.contains(item.id)
             )
-                .frame(width: viewModel.displayScale.listThumbnailSide + 8)
+            .frame(width: viewModel.displayScale.listThumbnailSide + 8)
 
-            ForEach(columns) { column in
-                cellText(column.text(for: item, metadata: metadata))
-                    .frame(width: column.width, alignment: column.alignment)
-            }
+            cellText(item.model.name)
+                .frame(minWidth: 140, maxWidth: .infinity, alignment: .leading)
+            cellText(item.model.kind)
+                .frame(width: 54, alignment: .leading)
+            cellText(item.model.timestamp ?? "")
+                .frame(width: 190, alignment: .leading)
+            cellText(ByteCountFormatter.string(fromByteCount: item.model.size, countStyle: .file))
+                .frame(width: 86, alignment: .trailing)
+            cellText(durationText(item.model.duration))
+                .frame(width: 72, alignment: .trailing)
         }
         .font(.callout)
         .padding(.horizontal, 12)
         .frame(height: max(34, viewModel.displayScale.listThumbnailSide + 10))
-        .frame(width: tableWidth, alignment: .leading)
         .background(rowBackground(for: item, index: index, isActionSelected: isActionSelected))
         .contextMenu {
             Button("Select") {
@@ -151,7 +140,14 @@ struct MediaListView: View {
     private func cellText(_ value: String) -> some View {
         Text(value)
             .lineLimit(1)
+            .truncationMode(.middle)
             .foregroundStyle(.secondary)
+    }
+
+    private func durationText(_ duration: Double?) -> String {
+        guard let duration else { return "" }
+        let totalSeconds = Int(duration.rounded())
+        return "\(totalSeconds / 60):\(String(format: "%02d", totalSeconds % 60))"
     }
 
     private func actionLabel(for item: MediaBrowserViewModel.MediaItem) -> String {
@@ -169,133 +165,6 @@ struct MediaListView: View {
             return Color.accentColor.opacity(0.12)
         }
         return index.isMultiple(of: 2) ? Color.clear : Color.secondary.opacity(0.06)
-    }
-}
-
-private enum MediaListColumn: String, CaseIterable, Identifiable, Equatable {
-    case name
-    case kind
-    case date
-    case fileSize
-    case width
-    case height
-    case location
-    case aperture
-    case colorSpace
-    case shutterSpeed
-    case maker
-    case model
-    case duration
-
-    var id: String { rawValue }
-
-    static let defaultOrder: [MediaListColumn] = [
-        .name, .kind, .date, .fileSize, .width, .height, .location, .aperture, .colorSpace, .shutterSpeed, .maker, .model, .duration
-    ]
-
-    var title: String {
-        switch self {
-        case .name: return "Name"
-        case .kind: return "Kind"
-        case .date: return "Date"
-        case .fileSize: return "File Size"
-        case .width: return "Width"
-        case .height: return "Height"
-        case .location: return "Location"
-        case .aperture: return "Aperture"
-        case .colorSpace: return "Color Space"
-        case .shutterSpeed: return "Shutter Speed"
-        case .maker: return "Maker"
-        case .model: return "Model"
-        case .duration: return "Duration"
-        }
-    }
-
-    var width: Double {
-        switch self {
-        case .name: return 220
-        case .kind: return 72
-        case .date: return 190
-        case .fileSize: return 96
-        case .width, .height: return 70
-        case .location: return 190
-        case .aperture: return 80
-        case .colorSpace: return 110
-        case .shutterSpeed: return 120
-        case .maker: return 100
-        case .model: return 120
-        case .duration: return 84
-        }
-    }
-
-    var alignment: Alignment {
-        switch self {
-        case .fileSize, .width, .height, .aperture, .shutterSpeed, .duration:
-            return .trailing
-        default:
-            return .leading
-        }
-    }
-
-    var sortField: MediaSortField? {
-        switch self {
-        case .name: return .name
-        case .kind: return .kind
-        case .date: return .timestamp
-        case .fileSize: return .size
-        case .width: return .width
-        case .height: return .height
-        case .duration: return .duration
-        case .location, .aperture, .colorSpace, .shutterSpeed, .maker, .model:
-            return nil
-        }
-    }
-
-    func text(for item: MediaBrowserViewModel.MediaItem, metadata: MediaMetadataSummary?) -> String {
-        switch self {
-        case .name: return item.model.name
-        case .kind: return item.model.kind
-        case .date: return item.model.timestamp ?? ""
-        case .fileSize: return ByteCountFormatter.string(fromByteCount: item.model.size, countStyle: .file)
-        case .width: return item.model.width.map(String.init) ?? ""
-        case .height: return item.model.height.map(String.init) ?? ""
-        case .location: return metadata?.location ?? item.model.location ?? ""
-        case .aperture: return metadata?.aperture ?? ""
-        case .colorSpace: return metadata?.colorSpace ?? ""
-        case .shutterSpeed: return metadata?.shutterSpeed ?? ""
-        case .maker: return metadata?.maker ?? ""
-        case .model: return metadata?.model ?? ""
-        case .duration: return durationText(item.model.duration)
-        }
-    }
-
-    private func durationText(_ duration: Double?) -> String {
-        guard let duration else { return "" }
-        let totalSeconds = Int(duration.rounded())
-        return "\(totalSeconds / 60):\(String(format: "%02d", totalSeconds % 60))"
-    }
-}
-
-private struct ColumnDropDelegate: DropDelegate {
-    let target: MediaListColumn
-    @Binding var columns: [MediaListColumn]
-    @Binding var draggedColumn: MediaListColumn?
-
-    func dropEntered(info: DropInfo) {
-        guard let draggedColumn,
-              draggedColumn != target,
-              let from = columns.firstIndex(of: draggedColumn),
-              let to = columns.firstIndex(of: target) else {
-            return
-        }
-        withAnimation(.easeInOut(duration: 0.12)) {
-            columns.move(fromOffsets: IndexSet(integer: from), toOffset: to > from ? to + 1 : to)
-        }
-    }
-
-    func performDrop(info: DropInfo) -> Bool {
-        draggedColumn = nil
-        return true
     }
 }
 

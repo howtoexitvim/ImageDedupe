@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 struct NativeSearchField: NSViewRepresentable {
@@ -5,11 +6,15 @@ struct NativeSearchField: NSViewRepresentable {
     let placeholder: String
 
     func makeNSView(context: Context) -> NSSearchField {
-        let searchField = NSSearchField()
+        let searchField = ClickThroughSearchField()
         searchField.placeholderString = placeholder
         searchField.delegate = context.coordinator
         searchField.sendsSearchStringImmediately = true
         searchField.controlSize = .regular
+        searchField.isEditable = true
+        searchField.isSelectable = true
+        searchField.isEnabled = true
+        searchField.focusRingType = .default
         return searchField
     }
 
@@ -37,5 +42,16 @@ struct NativeSearchField: NSViewRepresentable {
             }
             text = searchField.stringValue
         }
+    }
+}
+
+private final class ClickThroughSearchField: NSSearchField {
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool {
+        true
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        window?.makeFirstResponder(self)
+        super.mouseDown(with: event)
     }
 }

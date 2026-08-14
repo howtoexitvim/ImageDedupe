@@ -124,14 +124,10 @@ struct MediaBrowserView: View {
 
             Spacer(minLength: 12)
 
-            HStack(spacing: 6) {
-                Image(systemName: "magnifyingglass")
-                    .foregroundStyle(.secondary)
-                NativeSearchField(
-                    text: $viewModel.searchText,
-                    placeholder: "name, kind:heic, size:>2mb, duration:<10s"
-                )
-            }
+            NativeSearchField(
+                text: $viewModel.searchText,
+                placeholder: "name, kind:heic, size:>2mb, duration:<10s"
+            )
             .frame(height: 28)
             .frame(minWidth: 260, idealWidth: 420, maxWidth: 520)
             .help("Smart search: plain text or tokens like kind:heic size:>2mb duration:<10s")
