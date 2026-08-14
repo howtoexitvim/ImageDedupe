@@ -20,10 +20,9 @@ struct MediaGridView: View {
         gridBody
             // The Grid is still the SwiftUI renderer until Phase 4, so it has no native
             // first responder to claim focus ownership. Without this the shared model
-            // never sees `.mediaBrowser` and Escape/Command-A silently do nothing here,
-            // even though they work in the List.
+            // never sees `.mediaBrowser` and Escape silently does nothing here, even
+            // though it works in the List.
             .onAppear { viewModel.setFocusOwner(.mediaBrowser) }
-            .focusable()
             .onExitCommand { viewModel.clearSelection() }
     }
 
