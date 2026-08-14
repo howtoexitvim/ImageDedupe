@@ -27,8 +27,27 @@ final class MediaBrowserViewModel: ObservableObject {
 
     @Published var deviceName = "No Device"
     @Published var allItems: [MediaItem] = []
-    @Published var selectedItemID: String?
-    @Published var selectedActionIDs: Set<String> = []
+
+    /// Phase 1: focus and action selection live in one deterministic, unit-tested model.
+    /// Views keep reading `selectedItemID` / `selectedActionIDs`, which now project it.
+    @Published private(set) var selection = MediaSelectionState()
+
+    var selectedItemID: String? {
+        get { selection.focusedID }
+        set {
+            if let newValue {
+                selection.focus(newValue)
+            } else {
+                selection.focusedID = nil
+                selection.anchorID = nil
+            }
+        }
+    }
+
+    var selectedActionIDs: Set<String> {
+        selection.actionSelectedIDs
+    }
+
     @Published var reviewScope: MediaReviewScope = .allMedia
     @Published var searchText = ""
     @Published var sortField: MediaSortField = .timestamp
@@ -51,6 +70,13 @@ final class MediaBrowserViewModel: ObservableObject {
     private var metadataIDsInFlight = Set<String>()
     private var metadataAccessOrder: [String] = []
     private let maxCachedMetadataSummaries = 768
+
+    /// Publishes the current filtered order into the selection model so focus, anchor,
+    /// and action selection are reconciled exactly once per state change instead of
+    /// drifting behind search, sort, scope, scan, import, or delete.
+    func refreshVisibleOrder() {
+        selection.setVisibleIDs(filteredItems.map(\.id))
+    }
 
     var filteredItems: [MediaItem] {
         let scopedModels = reviewScope.apply(to: allItems.map(\.model), duplicatePlan: duplicatePlan)
@@ -113,10 +139,40 @@ final class MediaBrowserViewModel: ObservableObject {
     }
 
     func select(_ item: MediaItem) {
-        selectedItemID = item.id
+        refreshVisibleOrder()
+        selection.focus(item.id)
         isInspectorVisible = true
         loadThumbnails(for: [item])
         loadMetadata(for: item)
+    }
+
+    /// Arrow-key focus movement. Returns the ID the renderer should scroll into view.
+    @discardableResult
+    func moveFocus(by offset: Int, extendingSelection: Bool) -> String? {
+        refreshVisibleOrder()
+        return selection.moveFocus(by: offset, extendingSelection: extendingSelection)
+    }
+
+    /// Grid arrow movement using the renderer's measured column count.
+    @discardableResult
+    func moveFocus(rows: Int, columns: Int, columnCount: Int, extendingSelection: Bool) -> String? {
+        refreshVisibleOrder()
+        return selection.moveFocus(
+            rows: rows,
+            columns: columns,
+            columnCount: columnCount,
+            extendingSelection: extendingSelection
+        )
+    }
+
+    /// Space toggles the focused item in the action selection.
+    @discardableResult
+    func toggleFocusedItem() -> Bool {
+        selection.toggleFocusedItem()
+    }
+
+    func setFocusOwner(_ owner: MediaSelectionState.FocusOwner) {
+        selection.focusOwner = owner
     }
 
     func toggleInspector() {
@@ -124,25 +180,33 @@ final class MediaBrowserViewModel: ObservableObject {
     }
 
     func toggleActionSelection(_ item: MediaItem) {
-        if selectedActionIDs.contains(item.id) {
-            selectedActionIDs.remove(item.id)
-        } else {
-            selectedActionIDs.insert(item.id)
-        }
+        refreshVisibleOrder()
+        selection.toggleActionSelection(item.id)
     }
 
     func prepareContextActionSelection(for item: MediaItem) {
-        if !selectedActionIDs.contains(item.id) {
-            selectedActionIDs = [item.id]
+        refreshVisibleOrder()
+        if !selection.actionSelectedIDs.contains(item.id) {
+            selection.actionSelectedIDs = [item.id]
+            selection.anchorID = item.id
         }
     }
 
     func selectAllVisible() {
-        selectedActionIDs = Set(filteredItems.map(\.id))
+        refreshVisibleOrder()
+        selection.focusOwner = .mediaBrowser
+        selection.selectAllVisible()
     }
 
     func clearActionSelection() {
-        selectedActionIDs.removeAll()
+        selection.actionSelectedIDs.removeAll()
+    }
+
+    /// Escape: clears focus and action selection. Inspector visibility is independent
+    /// and deliberately left alone.
+    @discardableResult
+    func clearSelection() -> Bool {
+        selection.clearSelection()
     }
 
     func toggleSort(_ field: MediaSortField) {
@@ -200,10 +264,7 @@ final class MediaBrowserViewModel: ObservableObject {
 
     func selectReviewScope(_ scope: MediaReviewScope) {
         reviewScope = scope
-        if let selectedItemID,
-           !filteredItems.contains(where: { $0.id == selectedItemID }) {
-            self.selectedItemID = nil
-        }
+        refreshVisibleOrder()
     }
 
     func loadThumbnails(for items: [MediaItem]) {
@@ -259,8 +320,8 @@ final class MediaBrowserViewModel: ObservableObject {
         deviceName = payload.deviceName
         allItems = payload.items
         duplicatePlan = payload.plan
-        selectedItemID = nil
-        selectedActionIDs.removeAll()
+        selection = MediaSelectionState()
+        refreshVisibleOrder()
         importedItemIDs.removeAll()
         status = "Scanned \(payload.items.count) items. Conservative duplicates: \(payload.plan.delete.count)."
         fputs("ui-scan-succeeded: scanned=\(payload.items.count) duplicates=\(payload.plan.delete.count)\n", stderr)
@@ -337,11 +398,8 @@ final class MediaBrowserViewModel: ObservableObject {
         allItems.removeAll { item in
             requestedIDs.contains(item.id) && successfulHandles.contains(item.cameraFile.ptpObjectHandle)
         }
-        selectedActionIDs.subtract(requestedIDs)
-        if let selectedItemID, requestedIDs.contains(selectedItemID) {
-            self.selectedItemID = nil
-        }
         duplicatePlan = DuplicatePlanner.plan(files: allItems.map(\.model), rule: .nameKindSize)
+        refreshVisibleOrder()
         status = "Deleted \(summary.successful.count) item(s), \(summary.failed.count) failed, \(summary.canceled.count) canceled."
     }
 
