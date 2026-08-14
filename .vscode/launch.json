@@ -1,0 +1,24 @@
+{
+    "configurations": [
+        {
+            "type": "swift",
+            "request": "launch",
+            "args": [],
+            "cwd": "${workspaceFolder:iPhoneDedupeProject-2026-08-15-0024}",
+            "name": "Debug iphone-dedupe",
+            "target": "iphone-dedupe",
+            "configuration": "debug",
+            "preLaunchTask": "swift: Build Debug iphone-dedupe"
+        },
+        {
+            "type": "swift",
+            "request": "launch",
+            "args": [],
+            "cwd": "${workspaceFolder:iPhoneDedupeProject-2026-08-15-0024}",
+            "name": "Release iphone-dedupe",
+            "target": "iphone-dedupe",
+            "configuration": "release",
+            "preLaunchTask": "swift: Build Release iphone-dedupe"
+        }
+    ]
+}
