@@ -2,7 +2,7 @@ import SwiftUI
 
 struct MediaListView: View {
     @ObservedObject var viewModel: MediaBrowserViewModel
-    private let tableWidth: Double = 1160
+    private let tableWidth: Double = 1760
 
     var body: some View {
         ScrollView(.horizontal) {
@@ -14,7 +14,7 @@ struct MediaListView: View {
                     ForEach(Array(viewModel.filteredItems.enumerated()), id: \.element.id) { index, item in
                         row(for: item, index: index)
                             .onTapGesture { viewModel.select(item) }
-                            .onAppear { viewModel.loadThumbnails(for: [item]) }
+                            .onAppear { viewModel.loadVisibleDetails(for: item) }
                         }
                     }
                 }
@@ -28,19 +28,29 @@ struct MediaListView: View {
             Spacer()
                 .frame(width: viewModel.displayScale.listThumbnailSide + 8)
             headerText("Name")
-                .frame(width: 360, alignment: .leading)
+                .frame(width: 220, alignment: .leading)
             headerText("Kind")
                 .frame(width: 72, alignment: .leading)
             headerText("Date")
                 .frame(width: 190, alignment: .leading)
-            headerText("Size")
+            headerText("File Size")
                 .frame(width: 96, alignment: .trailing)
             headerText("Width")
                 .frame(width: 70, alignment: .trailing)
             headerText("Height")
                 .frame(width: 70, alignment: .trailing)
             headerText("Location")
-                .frame(width: 180, alignment: .leading)
+                .frame(width: 190, alignment: .leading)
+            headerText("Aperture")
+                .frame(width: 80, alignment: .trailing)
+            headerText("Color Space")
+                .frame(width: 110, alignment: .leading)
+            headerText("Shutter Speed")
+                .frame(width: 120, alignment: .trailing)
+            headerText("Maker")
+                .frame(width: 100, alignment: .leading)
+            headerText("Model")
+                .frame(width: 120, alignment: .leading)
             headerText("Duration")
                 .frame(width: 84, alignment: .trailing)
         }
@@ -51,7 +61,8 @@ struct MediaListView: View {
     }
 
     private func row(for item: MediaBrowserViewModel.MediaItem, index: Int) -> some View {
-        HStack(spacing: 12) {
+        let metadata = viewModel.metadataSummary(for: item)
+        return HStack(spacing: 12) {
             ThumbnailCell(image: viewModel.thumbnailCache[item.id], side: viewModel.displayScale.listThumbnailSide)
                 .frame(width: viewModel.displayScale.listThumbnailSide + 8)
 
@@ -67,7 +78,7 @@ struct MediaListView: View {
                         .background(Color.orange, in: RoundedRectangle(cornerRadius: 4))
                 }
             }
-            .frame(width: 360, alignment: .leading)
+            .frame(width: 220, alignment: .leading)
 
             Text(item.model.kind)
                 .lineLimit(1)
@@ -92,10 +103,35 @@ struct MediaListView: View {
                 .foregroundStyle(.secondary)
                 .frame(width: 70, alignment: .trailing)
 
-            Text(item.model.location ?? "")
+            Text(metadata?.location ?? item.model.location ?? "")
                 .lineLimit(1)
                 .foregroundStyle(.secondary)
-                .frame(width: 180, alignment: .leading)
+                .frame(width: 190, alignment: .leading)
+
+            Text(metadata?.aperture ?? "")
+                .lineLimit(1)
+                .foregroundStyle(.secondary)
+                .frame(width: 80, alignment: .trailing)
+
+            Text(metadata?.colorSpace ?? "")
+                .lineLimit(1)
+                .foregroundStyle(.secondary)
+                .frame(width: 110, alignment: .leading)
+
+            Text(metadata?.shutterSpeed ?? "")
+                .lineLimit(1)
+                .foregroundStyle(.secondary)
+                .frame(width: 120, alignment: .trailing)
+
+            Text(metadata?.maker ?? "")
+                .lineLimit(1)
+                .foregroundStyle(.secondary)
+                .frame(width: 100, alignment: .leading)
+
+            Text(metadata?.model ?? "")
+                .lineLimit(1)
+                .foregroundStyle(.secondary)
+                .frame(width: 120, alignment: .leading)
 
             Text(durationText(item.model.duration))
                 .lineLimit(1)

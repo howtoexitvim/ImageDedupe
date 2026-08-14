@@ -17,10 +17,10 @@ struct MediaBrowserView: View {
     }
 
     var body: some View {
-        NavigationSplitView {
+        HStack(spacing: 0) {
             sidebar
-                .navigationSplitViewColumnWidth(min: 220, ideal: 236, max: 270)
-        } content: {
+                .frame(width: 220)
+            Divider()
             VStack(spacing: 0) {
                 toolbar
                 Divider()
@@ -32,11 +32,11 @@ struct MediaBrowserView: View {
                 Divider()
                 statusBar
             }
-            .navigationSplitViewColumnWidth(min: 680, ideal: 860)
-        } detail: {
+            .frame(minWidth: 400, maxWidth: .infinity, maxHeight: .infinity)
+            Divider()
             InspectorView(viewModel: viewModel)
-                .frame(minWidth: 320, idealWidth: 340, maxWidth: 380, maxHeight: .infinity)
-                .navigationSplitViewColumnWidth(min: 320, ideal: 340, max: 380)
+                .frame(width: 300)
+                .frame(maxHeight: .infinity)
         }
         .task {
             if autoScanOnLaunch {
@@ -87,72 +87,72 @@ struct MediaBrowserView: View {
     }
 
     private var toolbar: some View {
-        HStack(spacing: 10) {
-            Picker("View", selection: $viewModel.viewMode) {
-                Label("List", systemImage: "list.bullet").tag(MediaBrowserViewModel.ViewMode.list)
-                Label("Grid", systemImage: "square.grid.3x3").tag(MediaBrowserViewModel.ViewMode.grid)
-            }
-            .pickerStyle(.segmented)
-            .labelsHidden()
-            .frame(width: 132)
-            .help("View mode")
-
-            Divider().frame(height: 22)
-
-            Picker("Kind", selection: $viewModel.selectedKind) {
-                ForEach(viewModel.kinds, id: \.self) { kind in
-                    Text(kind).tag(kind)
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 10) {
+                Picker("View", selection: $viewModel.viewMode) {
+                    Label("List", systemImage: "list.bullet").tag(MediaBrowserViewModel.ViewMode.list)
+                    Label("Grid", systemImage: "square.grid.3x3").tag(MediaBrowserViewModel.ViewMode.grid)
                 }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+                .frame(width: 132)
+                .help("View mode")
+
+                Divider().frame(height: 22)
+
+                Picker("Kind", selection: $viewModel.selectedKind) {
+                    ForEach(viewModel.kinds, id: \.self) { kind in
+                        Text(kind).tag(kind)
+                    }
+                }
+                .labelsHidden()
+                .frame(width: 116)
+                .help("Filter by file kind")
+
+                Picker("Sort", selection: $viewModel.sortField) {
+                    Text("Name").tag(MediaSortField.name)
+                    Text("Kind").tag(MediaSortField.kind)
+                    Text("Date").tag(MediaSortField.timestamp)
+                    Text("Size").tag(MediaSortField.size)
+                }
+                .labelsHidden()
+                .frame(width: 116)
+                .help("Sort field")
+
+                Picker("Order", selection: $viewModel.sortOrder) {
+                    Text("Asc").tag(SortOrder.ascending)
+                    Text("Desc").tag(SortOrder.descending)
+                }
+                .labelsHidden()
+                .frame(width: 112)
+                .help("Sort order")
+
+                TextField("Search name", text: $viewModel.searchText)
+                    .textFieldStyle(.roundedBorder)
+                    .frame(width: 240)
+
+                Divider().frame(height: 22)
+
+                Image(systemName: "photo")
+                    .foregroundStyle(.secondary)
+                Slider(
+                    value: Binding(
+                        get: { viewModel.displayScale.value },
+                        set: { viewModel.setDisplayScale($0) }
+                    ),
+                    in: 0.75...1.6
+                )
+                .frame(width: 120)
+                .help("Thumbnail size")
+                Image(systemName: "photo.fill")
+                    .foregroundStyle(.secondary)
             }
-            .labelsHidden()
-            .frame(width: 116)
-            .help("Filter by file kind")
-
-            Picker("Sort", selection: $viewModel.sortField) {
-                Text("Name").tag(MediaSortField.name)
-                Text("Kind").tag(MediaSortField.kind)
-                Text("Date").tag(MediaSortField.timestamp)
-                Text("Size").tag(MediaSortField.size)
-            }
-            .labelsHidden()
-            .frame(width: 116)
-            .help("Sort field")
-
-            Picker("Order", selection: $viewModel.sortOrder) {
-                Text("Asc").tag(SortOrder.ascending)
-                Text("Desc").tag(SortOrder.descending)
-            }
-            .labelsHidden()
-            .frame(width: 112)
-            .help("Sort order")
-
-            Spacer(minLength: 12)
-
-            TextField("Search name", text: $viewModel.searchText)
-                .textFieldStyle(.roundedBorder)
-                .frame(minWidth: 180, idealWidth: 260, maxWidth: 360)
-                .layoutPriority(1)
-
-            Divider().frame(height: 22)
-
-            Image(systemName: "photo")
-                .foregroundStyle(.secondary)
-            Slider(
-                value: Binding(
-                    get: { viewModel.displayScale.value },
-                    set: { viewModel.setDisplayScale($0) }
-                ),
-                in: 0.75...1.6
-            )
-            .frame(width: 120)
-            .help("Thumbnail size")
-            Image(systemName: "photo.fill")
-                .foregroundStyle(.secondary)
+            .frame(minWidth: 900, alignment: .leading)
+            .font(.callout)
+            .controlSize(.regular)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
         }
-        .font(.callout)
-        .controlSize(.regular)
-        .padding(.horizontal, 12)
-        .padding(.vertical, 8)
     }
 
     private var statusBar: some View {

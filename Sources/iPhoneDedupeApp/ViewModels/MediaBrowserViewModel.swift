@@ -45,6 +45,8 @@ final class MediaBrowserViewModel: ObservableObject {
     private var thumbnailAccessOrder: [String] = []
     private let maxCachedThumbnails = 512
     private var metadataIDsInFlight = Set<String>()
+    private var metadataAccessOrder: [String] = []
+    private let maxCachedMetadataSummaries = 768
 
     var kinds: [String] {
         let values = Set(allItems.map { $0.model.kind.uppercased() })
@@ -159,6 +161,11 @@ final class MediaBrowserViewModel: ObservableObject {
         metadataCache[item.id]
     }
 
+    func loadVisibleDetails(for item: MediaItem) {
+        loadThumbnails(for: [item])
+        loadMetadata(for: item)
+    }
+
     nonisolated private static func scanDevice(timeoutSeconds: TimeInterval) throws -> ScanPayload {
         let result = try DeviceSessionController(timeoutSeconds: timeoutSeconds).scan()
         let items = result.files.map { MediaItem(model: $0.model, cameraFile: $0.cameraFile) }
@@ -224,5 +231,15 @@ final class MediaBrowserViewModel: ObservableObject {
             return
         }
         metadataCache[id] = summary
+        metadataAccessOrder.removeAll { $0 == id }
+        metadataAccessOrder.append(id)
+        trimMetadataCacheIfNeeded()
+    }
+
+    private func trimMetadataCacheIfNeeded() {
+        while metadataAccessOrder.count > maxCachedMetadataSummaries {
+            let id = metadataAccessOrder.removeFirst()
+            metadataCache.removeValue(forKey: id)
+        }
     }
 }
