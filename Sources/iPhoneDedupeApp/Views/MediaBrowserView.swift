@@ -1,9 +1,11 @@
 import DeduperCore
+import AppKit
 import SwiftUI
 
 struct MediaBrowserView: View {
     @StateObject private var viewModel = MediaBrowserViewModel()
     @State private var sidebarSelection: SidebarItem = .allMedia
+    @State private var isConfirmingDelete = false
     private let autoScanOnLaunch: Bool
 
     private enum SidebarItem: String, Hashable {
@@ -157,10 +159,45 @@ struct MediaBrowserView: View {
 
     private var statusBar: some View {
         HStack {
+            Menu {
+                destinationButton("Pictures", .picturesDirectory)
+                destinationButton("Desktop", .desktopDirectory)
+                destinationButton("Documents", .documentDirectory)
+                destinationButton("Movies", .moviesDirectory)
+                destinationButton("Downloads", .downloadsDirectory)
+                Divider()
+                Button("Other...") { chooseImportDestination() }
+            } label: {
+                Label(viewModel.importDestination.lastPathComponent, systemImage: "folder")
+            }
+            .menuStyle(.borderlessButton)
+
+            Button("Import") {
+                viewModel.importSelected()
+            }
+            .disabled(viewModel.selectedActionIDs.isEmpty)
+
+            Button {
+                viewModel.revealLastImportInFinder()
+            } label: {
+                Image(systemName: "folder")
+            }
+            .buttonStyle(.borderless)
+            .help("Reveal last imported file in Finder")
+
+            Button("Delete") {
+                isConfirmingDelete = true
+            }
+            .disabled(viewModel.selectedActionIDs.isEmpty)
+
+            Divider().frame(height: 16)
+
             Text(viewModel.status)
                 .lineLimit(1)
                 .layoutPriority(1)
             Spacer()
+            Text("\(viewModel.selectedActionIDs.count) selected")
+                .lineLimit(1)
             Text("\(viewModel.filteredItems.count) shown / \(viewModel.allItems.count) total")
                 .lineLimit(1)
             Text("Would delete \(viewModel.duplicatePlan.delete.count)")
@@ -170,5 +207,36 @@ struct MediaBrowserView: View {
         .foregroundStyle(.secondary)
         .padding(.horizontal, 12)
         .padding(.vertical, 6)
+        .confirmationDialog(
+            "Delete \(viewModel.selectedActionIDs.count) item(s) from this iPhone?",
+            isPresented: $isConfirmingDelete,
+            titleVisibility: .visible
+        ) {
+            Button("Delete From Device", role: .destructive) {
+                viewModel.deleteSelected()
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("This uses ImageCaptureCore device deletion and cannot be undone by this app.")
+        }
+    }
+
+    private func destinationButton(_ title: String, _ directory: FileManager.SearchPathDirectory) -> some View {
+        Button(title) {
+            if let url = FileManager.default.urls(for: directory, in: .userDomainMask).first {
+                viewModel.importDestination = url
+            }
+        }
+    }
+
+    private func chooseImportDestination() {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = false
+        panel.canChooseDirectories = true
+        panel.allowsMultipleSelection = false
+        panel.directoryURL = viewModel.importDestination
+        if panel.runModal() == .OK, let url = panel.url {
+            viewModel.importDestination = url
+        }
     }
 }

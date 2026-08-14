@@ -24,6 +24,18 @@ import Testing
     #expect(sorted.map(\.id) == ["a", "b"])
 }
 
+@Test func sortsNamesUsingNaturalLocalizedOrder() {
+    let files = [
+        DeviceMediaFile(id: "10", name: "IMG_10.HEIC", kind: "HEIC", size: 10, timestamp: nil, width: nil, height: nil),
+        DeviceMediaFile(id: "9", name: "IMG_09.HEIC", kind: "HEIC", size: 10, timestamp: nil, width: nil, height: nil),
+        DeviceMediaFile(id: "2", name: "IMG_2.HEIC", kind: "HEIC", size: 10, timestamp: nil, width: nil, height: nil),
+    ]
+
+    let sorted = MediaSortDescriptor(field: .name, order: .ascending).sorted(files)
+
+    #expect(sorted.map(\.id) == ["2", "9", "10"])
+}
+
 @Test func sortUsesIdAsStableTieBreaker() {
     let files = [
         DeviceMediaFile(id: "b", name: "Same.JPG", kind: "JPG", size: 10, timestamp: nil, width: nil, height: nil),

@@ -1,8 +1,13 @@
+import Foundation
+
 public enum MediaSortField: String, Sendable {
     case name
     case kind
     case timestamp
     case size
+    case width
+    case height
+    case duration
 }
 
 public enum SortOrder: String, Sendable {
@@ -48,16 +53,21 @@ public struct MediaSortDescriptor: Equatable, Sendable {
                 return .orderedSame
             }
             return lhs.size < rhs.size ? .orderedAscending : .orderedDescending
+        case .width:
+            return compareOptionals(lhs.width, rhs.width)
+        case .height:
+            return compareOptionals(lhs.height, rhs.height)
+        case .duration:
+            return compareOptionals(lhs.duration, rhs.duration)
         }
     }
 
     private func compareStrings(_ lhs: String, _ rhs: String) -> SortComparison {
-        let left = lhs.lowercased()
-        let right = rhs.lowercased()
-        if left == right {
+        let comparison = lhs.localizedStandardCompare(rhs)
+        if comparison == .orderedSame {
             return .orderedSame
         }
-        return left < right ? .orderedAscending : .orderedDescending
+        return comparison == .orderedAscending ? .orderedAscending : .orderedDescending
     }
 
     private func compareOptionals(_ lhs: String?, _ rhs: String?) -> SortComparison {
@@ -70,6 +80,22 @@ public struct MediaSortDescriptor: Equatable, Sendable {
             return .orderedAscending
         case (.some(let left), .some(let right)):
             return compareStrings(left, right)
+        }
+    }
+
+    private func compareOptionals<T: Comparable>(_ lhs: T?, _ rhs: T?) -> SortComparison {
+        switch (lhs, rhs) {
+        case (.none, .none):
+            return .orderedSame
+        case (.none, .some):
+            return .orderedDescending
+        case (.some, .none):
+            return .orderedAscending
+        case (.some(let left), .some(let right)):
+            if left == right {
+                return .orderedSame
+            }
+            return left < right ? .orderedAscending : .orderedDescending
         }
     }
 }

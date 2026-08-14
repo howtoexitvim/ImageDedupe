@@ -28,6 +28,7 @@ final class MediaBrowserViewModel: ObservableObject {
     @Published var deviceName = "No Device"
     @Published var allItems: [MediaItem] = []
     @Published var selectedItemID: String?
+    @Published var selectedActionIDs: Set<String> = []
     @Published var reviewScope: MediaReviewScope = .allMedia
     @Published var searchText = ""
     @Published var selectedKind = "All"
@@ -40,6 +41,8 @@ final class MediaBrowserViewModel: ObservableObject {
     @Published var thumbnailCache: [String: NSImage] = [:]
     @Published var metadataCache: [String: MediaMetadataSummary] = [:]
     @Published var duplicatePlan = DuplicatePlan(keep: [], delete: [])
+    @Published var importDestination = FileManager.default.urls(for: .picturesDirectory, in: .userDomainMask).first ?? URL(fileURLWithPath: NSHomeDirectory())
+    @Published var lastImportedFileURL: URL?
 
     private var thumbnailIDsInFlight = Set<String>()
     private var thumbnailAccessOrder: [String] = []
@@ -86,6 +89,14 @@ final class MediaBrowserViewModel: ObservableObject {
         duplicatePlan.delete.reduce(0) { $0 + $1.size }
     }
 
+    var selectedActionItems: [MediaItem] {
+        allItems.filter { selectedActionIDs.contains($0.id) }
+    }
+
+    var selectedActionBytes: Int64 {
+        selectedActionItems.reduce(0) { $0 + $1.model.size }
+    }
+
     func scan() {
         guard !isScanning else {
             return
@@ -114,6 +125,81 @@ final class MediaBrowserViewModel: ObservableObject {
         selectedItemID = item.id
         loadThumbnails(for: [item])
         loadMetadata(for: item)
+    }
+
+    func toggleActionSelection(_ item: MediaItem) {
+        if selectedActionIDs.contains(item.id) {
+            selectedActionIDs.remove(item.id)
+        } else {
+            selectedActionIDs.insert(item.id)
+        }
+    }
+
+    func prepareContextActionSelection(for item: MediaItem) {
+        if !selectedActionIDs.contains(item.id) {
+            selectedActionIDs = [item.id]
+        }
+    }
+
+    func selectAllVisible() {
+        selectedActionIDs = Set(filteredItems.map(\.id))
+    }
+
+    func clearActionSelection() {
+        selectedActionIDs.removeAll()
+    }
+
+    func toggleSort(_ field: MediaSortField) {
+        if sortField == field {
+            sortOrder = sortOrder == .ascending ? .descending : .ascending
+        } else {
+            sortField = field
+            sortOrder = .ascending
+        }
+    }
+
+    func importSelected() {
+        let items = selectedActionItems
+        guard !items.isEmpty else {
+            status = "Select one or more items to import."
+            return
+        }
+        status = "Importing \(items.count) item(s)..."
+        Task.detached(priority: .userInitiated) { [weak self, destination = importDestination] in
+            guard let self else { return }
+            let summary = DeviceImportController(timeoutSeconds: 120).importFiles(items.map(\.cameraFile), to: destination)
+            await self.applyImportSummary(summary, destination: destination)
+        }
+    }
+
+    func deleteSelected() {
+        let items = selectedActionItems
+        guard !items.isEmpty else {
+            status = "Select one or more items to delete."
+            return
+        }
+        status = "Deleting \(items.count) item(s)..."
+        Task.detached(priority: .userInitiated) { [weak self] in
+            guard let self else { return }
+            guard let device = items.first?.cameraFile.device else {
+                await self.applyDeleteFailure("No device available for selected files.")
+                return
+            }
+            do {
+                let summary = try DeviceSessionController(timeoutSeconds: 120).delete(items.map(\.cameraFile), from: device, confirmed: true)
+                await self.applyDeleteSummary(summary, requestedIDs: Set(items.map(\.id)))
+            } catch {
+                await self.applyDeleteFailure("\(error)")
+            }
+        }
+    }
+
+    func revealLastImportInFinder() {
+        guard let lastImportedFileURL else {
+            status = "No imported file to reveal yet."
+            return
+        }
+        NSWorkspace.shared.activateFileViewerSelecting([lastImportedFileURL])
     }
 
     func selectReviewScope(_ scope: MediaReviewScope) {
@@ -178,6 +264,7 @@ final class MediaBrowserViewModel: ObservableObject {
         allItems = payload.items
         duplicatePlan = payload.plan
         selectedItemID = nil
+        selectedActionIDs.removeAll()
         status = "Scanned \(payload.items.count) items. Conservative duplicates: \(payload.plan.delete.count)."
         fputs("ui-scan-succeeded: scanned=\(payload.items.count) duplicates=\(payload.plan.delete.count)\n", stderr)
         isScanning = false
@@ -234,6 +321,30 @@ final class MediaBrowserViewModel: ObservableObject {
         metadataAccessOrder.removeAll { $0 == id }
         metadataAccessOrder.append(id)
         trimMetadataCacheIfNeeded()
+    }
+
+    private func applyImportSummary(_ summary: DeviceImportSummary, destination: URL) {
+        if let filename = summary.successful.last?.filename {
+            lastImportedFileURL = destination.appendingPathComponent(filename)
+        }
+        status = "Imported \(summary.successful.count) item(s), \(summary.failed.count) failed."
+    }
+
+    private func applyDeleteSummary(_ summary: DeviceDeleteSummary, requestedIDs: Set<String>) {
+        let successfulHandles = Set(summary.successful.map(\.ptpObjectHandle))
+        allItems.removeAll { item in
+            requestedIDs.contains(item.id) && successfulHandles.contains(item.cameraFile.ptpObjectHandle)
+        }
+        selectedActionIDs.subtract(requestedIDs)
+        if let selectedItemID, requestedIDs.contains(selectedItemID) {
+            self.selectedItemID = nil
+        }
+        duplicatePlan = DuplicatePlanner.plan(files: allItems.map(\.model), rule: .nameKindSize)
+        status = "Deleted \(summary.successful.count) item(s), \(summary.failed.count) failed, \(summary.canceled.count) canceled."
+    }
+
+    private func applyDeleteFailure(_ message: String) {
+        status = "Delete failed: \(message)"
     }
 
     private func trimMetadataCacheIfNeeded() {

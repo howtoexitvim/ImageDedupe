@@ -29,6 +29,7 @@ private struct Arguments {
     let command: String
     let targetName: String?
     let timeout: TimeInterval
+    let destination: URL?
     let delete: Bool
     let confirmed: Bool
 
@@ -39,6 +40,7 @@ private struct Arguments {
 
         var targetName: String?
         var timeout: TimeInterval = 180
+        var destination: URL?
         var delete = false
         var confirmed = false
         var index = 1
@@ -58,6 +60,12 @@ private struct Arguments {
                 }
                 timeout = TimeInterval(raw[index + 1]) ?? timeout
                 index += 2
+            case "--destination":
+                guard index + 1 < raw.count else {
+                    throw CommandError.missingValue(arg)
+                }
+                destination = URL(fileURLWithPath: raw[index + 1])
+                index += 2
             case "--delete":
                 delete = true
                 index += 1
@@ -73,6 +81,7 @@ private struct Arguments {
             command: command,
             targetName: targetName,
             timeout: timeout,
+            destination: destination,
             delete: delete,
             confirmed: confirmed
         )
@@ -85,6 +94,7 @@ private func printUsage() {
       iPhoneDedupeVerifier scan [--timeout 180]
       iPhoneDedupeVerifier find-exact-name --target-name CJKU9084.PNG [--timeout 180]
       iPhoneDedupeVerifier inspect-location --target-name IMG_1309.HEIC [--timeout 180]
+      iPhoneDedupeVerifier import-exact-name --target-name IMG_1128.HEIC --destination /tmp [--timeout 180]
       iPhoneDedupeVerifier delete-exact-name --target-name CJKU9084.PNG --delete --i-understand-this-deletes-from-device [--timeout 180]
     """)
 }
@@ -223,6 +233,36 @@ private func deleteExactName(_ args: Arguments) throws {
     print("remainingExactMatches=\(remaining.count)")
 }
 
+private func importExactName(_ args: Arguments) throws {
+    guard let targetName = args.targetName, !targetName.isEmpty else {
+        throw CommandError.missingValue("--target-name")
+    }
+    guard let destination = args.destination else {
+        throw CommandError.missingValue("--destination")
+    }
+    try FileManager.default.createDirectory(at: destination, withIntermediateDirectories: true)
+
+    let result = try scanWithRetry(timeout: args.timeout)
+    let matches = result.files.filter { $0.model.name == targetName }
+    print("device=\(result.deviceName)")
+    print("scanned=\(result.files.count)")
+    print("targetName=\(targetName)")
+    print("exactMatches=\(matches.count)")
+    guard matches.count == 1 else {
+        throw CommandError.unsafeMatchCount(matches.count)
+    }
+
+    let summary = DeviceImportController(timeoutSeconds: args.timeout).importFiles(matches.map(\.cameraFile), to: destination)
+    print("importSuccessful=\(summary.successful.count)")
+    print("importFailed=\(summary.failed.count)")
+    for imported in summary.successful {
+        print("imported=\(destination.appendingPathComponent(imported.filename).path)")
+    }
+    for failure in summary.failed {
+        print("failure=\(failure.file.name ?? "unknown") error=\(failure.error)")
+    }
+}
+
 do {
     let args = try Arguments.parse(Array(CommandLine.arguments.dropFirst()))
     switch args.command {
@@ -232,6 +272,8 @@ do {
         try findExactName(args)
     case "inspect-location":
         try inspectLocation(args)
+    case "import-exact-name":
+        try importExactName(args)
     case "delete-exact-name":
         try deleteExactName(args)
     default:
