@@ -18,6 +18,7 @@ Xcode can open Swift packages directly. The package contains:
 - `DeviceMediaKit`: ImageCaptureCore device scanning, media mapping, thumbnails, import, and delete execution.
 - `iPhoneDedupeApp`: SwiftUI macOS app.
 - `DeduperCoreTests`: unit tests.
+- `iPhoneDedupeAppTests`: AppKit search binding and list layout regression tests.
 - `docs/`: product log, architecture notes, and product spec.
 
 ## Build And Test
@@ -28,11 +29,14 @@ swift test
 swift build
 ```
 
-Run the local debug app:
+Build the standard local debug app bundle:
 
 ```sh
-.build/debug/iPhoneDedupeApp
+./scripts/build-debug-app.sh
+open ".build/debug/iPhone Dedupe.app"
 ```
+
+Use the `.app` bundle for UI testing. Opening the raw SwiftPM executable bypasses normal macOS app registration and can break text focus and accessibility behavior.
 
 ## Notes
 

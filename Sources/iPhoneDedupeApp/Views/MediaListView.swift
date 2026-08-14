@@ -5,22 +5,28 @@ import SwiftUI
 struct MediaListView: View {
     @ObservedObject var viewModel: MediaBrowserViewModel
     @State private var isConfirmingDelete = false
-    private let tableMinWidth: Double = 820
 
     var body: some View {
-        ScrollView([.vertical, .horizontal]) {
-            VStack(spacing: 0) {
-                header
-                Divider()
-                LazyVStack(spacing: 0) {
-                    ForEach(Array(viewModel.filteredItems.enumerated()), id: \.element.id) { index, item in
-                        row(for: item, index: index)
-                            .onTapGesture { viewModel.select(item) }
-                            .onAppear { viewModel.loadVisibleDetails(for: item) }
+        GeometryReader { viewport in
+            ScrollView(.horizontal) {
+                VStack(spacing: 0) {
+                    header
+                    Divider()
+                    ScrollView(.vertical) {
+                        LazyVStack(spacing: 0) {
+                            ForEach(Array(viewModel.filteredItems.enumerated()), id: \.element.id) { index, item in
+                                row(for: item, index: index)
+                                    .onTapGesture { viewModel.select(item) }
+                                    .onAppear { viewModel.loadVisibleDetails(for: item) }
+                            }
+                        }
                     }
                 }
+                .frame(
+                    width: MediaListLayout.contentWidth(viewportWidth: viewport.size.width),
+                    alignment: .leading
+                )
             }
-            .frame(minWidth: tableMinWidth, maxWidth: .infinity, alignment: .leading)
         }
         .confirmationDialog(
             "Delete \(viewModel.selectedActionIDs.count) item(s) from this iPhone?",
@@ -66,7 +72,6 @@ struct MediaListView: View {
         }
         .padding(.horizontal, 12)
         .frame(height: 34)
-        .frame(minWidth: tableMinWidth, maxWidth: .infinity)
         .background(Color(nsColor: .controlBackgroundColor))
     }
 
@@ -123,7 +128,6 @@ struct MediaListView: View {
         .font(.callout)
         .padding(.horizontal, 12)
         .frame(height: max(34, viewModel.displayScale.listThumbnailSide + 10))
-        .frame(minWidth: tableMinWidth, maxWidth: .infinity)
         .background(rowBackground(for: item, index: index, isActionSelected: isActionSelected))
         .contextMenu {
             Button("Select") {
@@ -169,6 +173,14 @@ struct MediaListView: View {
             return Color.accentColor.opacity(0.12)
         }
         return index.isMultiple(of: 2) ? Color.clear : Color.secondary.opacity(0.06)
+    }
+}
+
+enum MediaListLayout {
+    static let minimumContentWidth: Double = 820
+
+    static func contentWidth(viewportWidth: Double) -> Double {
+        max(viewportWidth, minimumContentWidth)
     }
 }
 

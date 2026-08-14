@@ -28,5 +28,9 @@ let package = Package(
             name: "DeduperCoreTests",
             dependencies: ["DeduperCore"]
         ),
+        .testTarget(
+            name: "iPhoneDedupeAppTests",
+            dependencies: ["iPhoneDedupeApp"]
+        ),
     ]
 )
