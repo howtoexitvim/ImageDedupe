@@ -101,6 +101,45 @@ final class MediaGridLayoutTests: XCTestCase {
             "the tile must be taller than its thumbnail to fit the name and size labels"
         )
     }
+
+    /// Regression: the reported item size must equal exactly what the tile's constraints
+    /// produce. The first attempt sized the cell but left the thumbnail without a height
+    /// constraint, so each image sized its own tile and the tiles overlapped.
+    func testReportedItemHeightMatchesTheConstraintChainExactly() {
+        for thumbnailHeight in stride(from: 60.0, through: 300.0, by: 7.0) {
+            let size = MediaGridLayout.itemSize(thumbnailHeight: thumbnailHeight)
+            let constraintChain = (
+                MediaGridLayout.tilePadding                 // top padding
+                + CGFloat(thumbnailHeight).rounded()        // fixed thumbnail square
+                + MediaGridLayout.thumbnailToNameGap
+                + MediaGridLayout.nameLabelHeight
+                + MediaGridLayout.nameToSizeGap
+                + MediaGridLayout.sizeLabelHeight
+                + MediaGridLayout.tilePadding               // bottom padding
+            ).rounded()
+
+            XCTAssertEqual(
+                size.height,
+                constraintChain,
+                "cell height must match the constraints at thumbnailHeight=\(thumbnailHeight)"
+            )
+        }
+    }
+
+    func testCaptionHeightIsTheSumOfItsParts() {
+        XCTAssertEqual(
+            MediaGridLayout.captionHeight,
+            MediaGridLayout.thumbnailToNameGap
+                + MediaGridLayout.nameLabelHeight
+                + MediaGridLayout.nameToSizeGap
+                + MediaGridLayout.sizeLabelHeight
+        )
+    }
+
+    func testItemWidthIsThumbnailPlusBothPaddings() {
+        let size = MediaGridLayout.itemSize(thumbnailHeight: 100)
+        XCTAssertEqual(size.width, 100 + MediaGridLayout.tilePadding * 2)
+    }
 }
 
 @MainActor

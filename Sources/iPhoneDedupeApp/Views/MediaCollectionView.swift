@@ -47,6 +47,9 @@ struct MediaCollectionView: NSViewRepresentable {
         scrollView.autohidesScrollers = true
         scrollView.drawsBackground = true
         scrollView.backgroundColor = .controlBackgroundColor
+        // The collection view must track the clip view's width so the flow layout reflows
+        // on resize instead of keeping a stale row width.
+        collectionView.autoresizingMask = [.width]
 
         context.coordinator.collectionView = collectionView
         context.coordinator.scrollView = scrollView
@@ -108,6 +111,8 @@ struct MediaCollectionView: NSViewRepresentable {
             }
 
             if itemsChanged || densityChanged {
+                // A density change also reloads so every live item picks up the new
+                // thumbnail height; the layout was invalidated just above.
                 collectionView.reloadData()
             } else {
                 refreshVisibleDecoration()
@@ -159,6 +164,7 @@ struct MediaCollectionView: NSViewRepresentable {
             view.configure(
                 name: item.model.name,
                 size: ByteCountFormatter.string(fromByteCount: item.model.size, countStyle: .file),
+                thumbnailHeight: CGFloat(viewModel.displayScale.gridThumbnailHeight).rounded(),
                 image: viewModel.thumbnailCache[item.id],
                 isActionSelected: actionSelected.contains(item.id),
                 isFocused: focusedID == item.id,

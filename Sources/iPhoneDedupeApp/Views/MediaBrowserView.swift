@@ -131,7 +131,11 @@ struct MediaBrowserView: View {
 
             NativeSearchField(
                 text: $viewModel.searchText,
-                placeholder: "name, kind:heic, size:>2mb, duration:<10s"
+                placeholder: "name, kind:heic, size:>2mb, duration:<10s",
+                onFocusChange: { hasFocus in
+                    // While the search field edits text, media shortcuts must not fire.
+                    viewModel.setFocusOwner(hasFocus ? .search : .none)
+                }
             )
             .frame(height: 28)
             .frame(minWidth: 260, idealWidth: 420, maxWidth: 520)

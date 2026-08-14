@@ -15,49 +15,13 @@ struct MediaListView: View {
 }
 
 enum MediaListLayout {
-    /// The List's intrinsic content width now comes from the table's own columns rather
-    /// than from a viewport formula. Anything narrower scrolls horizontally.
+    /// The List's intrinsic content width comes from the table's own columns rather than
+    /// from a viewport formula. Anything narrower scrolls horizontally.
     static var minimumContentWidth: Double {
         Double(MediaTableColumn.totalDefaultWidth)
     }
 
     static func contentWidth(viewportWidth: Double) -> Double {
         max(viewportWidth, minimumContentWidth)
-    }
-}
-
-struct ThumbnailCell: View {
-    let image: NSImage?
-    let side: Double
-    let isImported: Bool
-
-    var body: some View {
-        ZStack(alignment: .bottomTrailing) {
-            if let image {
-                Image(nsImage: image)
-                    .resizable()
-                    .scaledToFill()
-            } else {
-                Image(systemName: "photo")
-                    .foregroundStyle(.secondary)
-            }
-            if isImported {
-                ImportedBadge()
-                    .offset(x: 3, y: 3)
-            }
-        }
-        .frame(width: side, height: side)
-        .background(Color.secondary.opacity(0.08))
-        .clipShape(RoundedRectangle(cornerRadius: 3))
-    }
-}
-
-struct ImportedBadge: View {
-    var body: some View {
-        Image(systemName: "checkmark.circle.fill")
-            .font(.system(size: 14, weight: .semibold))
-            .foregroundStyle(.white, Color.green)
-            .shadow(radius: 1)
-            .help("Imported")
     }
 }

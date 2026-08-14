@@ -17,6 +17,7 @@ final class MediaGridItemView: NSCollectionViewItem {
     private let container = MediaGridTileView()
 
     private var onToggle: (() -> Void)?
+    private var thumbnailHeightConstraint: NSLayoutConstraint!
 
     override func loadView() {
         view = container
@@ -66,19 +67,32 @@ final class MediaGridItemView: NSCollectionViewItem {
         duplicateBadge.translatesAutoresizingMaskIntoConstraints = false
         container.addSubview(duplicateBadge)
 
+        // An image view with no height constraint takes its height from the image's
+        // intrinsic size, so every photo produced a differently sized tile and the labels
+        // collided. The thumbnail is pinned to an explicit square instead, and the labels
+        // get fixed heights, so a tile's layout never depends on its content.
         let padding = MediaGridLayout.tilePadding
+        thumbnailHeightConstraint = thumbnail.heightAnchor.constraint(equalToConstant: 0)
+        thumbnail.setContentHuggingPriority(.defaultLow, for: .vertical)
+        thumbnail.setContentCompressionResistancePriority(.defaultLow, for: .vertical)
+        nameLabel.setContentCompressionResistancePriority(.required, for: .vertical)
+        sizeLabel.setContentCompressionResistancePriority(.required, for: .vertical)
+
         NSLayoutConstraint.activate([
             thumbnail.topAnchor.constraint(equalTo: container.topAnchor, constant: padding),
             thumbnail.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: padding),
             thumbnail.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -padding),
+            thumbnailHeightConstraint,
 
             nameLabel.topAnchor.constraint(equalTo: thumbnail.bottomAnchor, constant: 5),
             nameLabel.leadingAnchor.constraint(equalTo: thumbnail.leadingAnchor),
             nameLabel.trailingAnchor.constraint(equalTo: thumbnail.trailingAnchor),
+            nameLabel.heightAnchor.constraint(equalToConstant: MediaGridLayout.nameLabelHeight),
 
             sizeLabel.topAnchor.constraint(equalTo: nameLabel.bottomAnchor, constant: 2),
             sizeLabel.leadingAnchor.constraint(equalTo: thumbnail.leadingAnchor),
             sizeLabel.trailingAnchor.constraint(equalTo: thumbnail.trailingAnchor),
+            sizeLabel.heightAnchor.constraint(equalToConstant: MediaGridLayout.sizeLabelHeight),
 
             checkbox.topAnchor.constraint(equalTo: thumbnail.topAnchor, constant: 4),
             checkbox.trailingAnchor.constraint(equalTo: thumbnail.trailingAnchor, constant: -4),
@@ -98,6 +112,7 @@ final class MediaGridItemView: NSCollectionViewItem {
     func configure(
         name: String,
         size: String,
+        thumbnailHeight: CGFloat,
         image: NSImage?,
         isActionSelected: Bool,
         isFocused: Bool,
@@ -106,6 +121,7 @@ final class MediaGridItemView: NSCollectionViewItem {
         isDuplicateCandidate: Bool,
         onToggle: @escaping () -> Void
     ) {
+        thumbnailHeightConstraint.constant = thumbnailHeight
         nameLabel.stringValue = name
         sizeLabel.stringValue = size
         thumbnail.image = image ?? NSImage(systemSymbolName: "photo", accessibilityDescription: "No preview yet")

@@ -244,7 +244,8 @@ final class MediaBrowserViewModel: ObservableObject {
 
     func selectAllVisible() {
         refreshVisibleOrder()
-        selection.focusOwner = .mediaBrowser
+        // Deliberately does not force focus ownership. Command-A while the search field is
+        // editing belongs to that text, not to the media browser.
         selection.selectAllVisible()
     }
 

@@ -11,11 +11,23 @@ enum MediaGridLayout {
     static let spacing: CGFloat = 10
     static let sectionInset: CGFloat = 12
 
-    /// Vertical room a tile needs below its thumbnail for the name and size labels.
-    static let captionHeight: CGFloat = 34
-
     /// Horizontal padding inside a tile, around the thumbnail.
     static let tilePadding: CGFloat = 6
+
+    /// Fixed label heights. The tile's height is computed from these exact numbers, so the
+    /// cell size the layout reports always matches what the constraints actually produce.
+    /// If these drift apart, tiles overlap.
+    static let nameLabelHeight: CGFloat = 15
+    static let sizeLabelHeight: CGFloat = 13
+
+    /// Gap above the name label, and between the two labels.
+    static let thumbnailToNameGap: CGFloat = 5
+    static let nameToSizeGap: CGFloat = 2
+
+    /// Total vertical room below the thumbnail: both labels plus both gaps.
+    static var captionHeight: CGFloat {
+        thumbnailToNameGap + nameLabelHeight + nameToSizeGap + sizeLabelHeight
+    }
 
     /// How many whole items fit across `availableWidth`.
     ///
@@ -37,14 +49,14 @@ enum MediaGridLayout {
 
     /// The fixed size of one tile at the current thumbnail density.
     ///
-    /// Item size is fixed rather than stretched to fill the row. `LazyVGrid`'s adaptive
-    /// sizing let items grow independently of their content, which is what produced the
-    /// reported overlapping tiles.
+    /// The thumbnail is a fixed square of `thumbnailHeight`, and the caption block below
+    /// it has fixed height, so this size is exactly what the tile's constraints produce.
+    /// Reporting a size the content does not honour is what makes cells overlap.
     static func itemSize(thumbnailHeight: Double) -> NSSize {
-        let side = CGFloat(thumbnailHeight)
+        let side = CGFloat(thumbnailHeight).rounded()
         return NSSize(
             width: side + tilePadding * 2,
-            height: side + captionHeight + tilePadding * 2
+            height: (side + captionHeight + tilePadding * 2).rounded()
         )
     }
 
