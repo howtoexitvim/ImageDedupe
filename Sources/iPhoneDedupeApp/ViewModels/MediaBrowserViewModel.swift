@@ -38,11 +38,13 @@ final class MediaBrowserViewModel: ObservableObject {
     @Published var status = "Connect and unlock your iPhone, then scan."
     @Published var isScanning = false
     @Published var thumbnailCache: [String: NSImage] = [:]
+    @Published var metadataCache: [String: MediaMetadataSummary] = [:]
     @Published var duplicatePlan = DuplicatePlan(keep: [], delete: [])
 
     private var thumbnailIDsInFlight = Set<String>()
     private var thumbnailAccessOrder: [String] = []
     private let maxCachedThumbnails = 512
+    private var metadataIDsInFlight = Set<String>()
 
     var kinds: [String] {
         let values = Set(allItems.map { $0.model.kind.uppercased() })
@@ -109,6 +111,7 @@ final class MediaBrowserViewModel: ObservableObject {
     func select(_ item: MediaItem) {
         selectedItemID = item.id
         loadThumbnails(for: [item])
+        loadMetadata(for: item)
     }
 
     func selectReviewScope(_ scope: MediaReviewScope) {
@@ -150,6 +153,10 @@ final class MediaBrowserViewModel: ObservableObject {
 
     func setDisplayScale(_ rawValue: Double) {
         displayScale = MediaDisplayScale(rawValue: rawValue)
+    }
+
+    func metadataSummary(for item: MediaItem) -> MediaMetadataSummary? {
+        metadataCache[item.id]
     }
 
     nonisolated private static func scanDevice(timeoutSeconds: TimeInterval) throws -> ScanPayload {
@@ -194,5 +201,28 @@ final class MediaBrowserViewModel: ObservableObject {
             let id = thumbnailAccessOrder.removeFirst()
             thumbnailCache.removeValue(forKey: id)
         }
+    }
+
+    private func loadMetadata(for item: MediaItem) {
+        guard metadataCache[item.id] == nil,
+              !metadataIDsInFlight.contains(item.id) else {
+            return
+        }
+        metadataIDsInFlight.insert(item.id)
+        Task.detached(priority: .utility) { [weak self] in
+            guard let self else {
+                return
+            }
+            let summary = MetadataProvider.summary(for: item.cameraFile, timeoutSeconds: 30)
+            await self.cacheMetadata(summary, id: item.id)
+        }
+    }
+
+    private func cacheMetadata(_ summary: MediaMetadataSummary?, id: String) {
+        metadataIDsInFlight.remove(id)
+        guard let summary else {
+            return
+        }
+        metadataCache[id] = summary
     }
 }

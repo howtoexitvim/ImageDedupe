@@ -12,7 +12,7 @@ private enum CommandError: Error, CustomStringConvertible {
     var description: String {
         switch self {
         case .missingCommand:
-            return "Missing command. Use scan, find-exact-name, or delete-exact-name."
+            return "Missing command. Use scan, find-exact-name, inspect-location, or delete-exact-name."
         case .unknownCommand(let command):
             return "Unknown command: \(command)"
         case .missingValue(let flag):
@@ -84,6 +84,7 @@ private func printUsage() {
     Usage:
       iPhoneDedupeVerifier scan [--timeout 180]
       iPhoneDedupeVerifier find-exact-name --target-name CJKU9084.PNG [--timeout 180]
+      iPhoneDedupeVerifier inspect-location --target-name IMG_1309.HEIC [--timeout 180]
       iPhoneDedupeVerifier delete-exact-name --target-name CJKU9084.PNG --delete --i-understand-this-deletes-from-device [--timeout 180]
     """)
 }
@@ -138,8 +139,50 @@ private func findExactName(_ args: Arguments) throws {
     print("targetName=\(targetName)")
     print("exactMatches=\(matches.count)")
     for match in matches {
-        print("match=\(match.model.name) kind=\(match.model.kind) size=\(match.model.size) timestamp=\(match.model.timestamp ?? "unknown")")
+        print("match=\(match.model.name) kind=\(match.model.kind) size=\(match.model.size) timestamp=\(match.model.timestamp ?? "unknown") location=\(match.model.location ?? "unknown")")
     }
+}
+
+private func inspectLocation(_ args: Arguments) throws {
+    guard let targetName = args.targetName, !targetName.isEmpty else {
+        throw CommandError.missingValue("--target-name")
+    }
+
+    let result = try scanWithRetry(timeout: args.timeout)
+    let matches = result.files.filter { $0.model.name == targetName }
+    print("device=\(result.deviceName)")
+    print("scanned=\(result.files.count)")
+    print("targetName=\(targetName)")
+    print("exactMatches=\(matches.count)")
+    guard let match = matches.first else {
+        return
+    }
+
+    print("mapped.location=\(match.model.location ?? "unknown")")
+    print("camera.gpsString=\(match.cameraFile.gpsString ?? "unknown")")
+    print("camera.width=\(match.cameraFile.width)")
+    print("camera.height=\(match.cameraFile.height)")
+    print("requestingMetadata=true")
+
+    guard let metadata = MetadataProvider.metadata(for: match.cameraFile, timeoutSeconds: 30) else {
+        print("metadata=nil")
+        return
+    }
+
+    print("metadata.keys=\(metadata.keys.map { String(describing: $0) }.sorted().joined(separator: ","))")
+    printMetadataSection(metadata, key: "{GPS}")
+    printMetadataSection(metadata, key: "GPS")
+    printMetadataSection(metadata, key: "{Exif}")
+    printMetadataSection(metadata, key: "Exif")
+    printMetadataSection(metadata, key: "{TIFF}")
+    printMetadataSection(metadata, key: "TIFF")
+}
+
+private func printMetadataSection(_ metadata: [AnyHashable: Any], key: String) {
+    guard let section = metadata[key] else {
+        return
+    }
+    print("metadata.\(key)=\(section)")
 }
 
 private func deleteExactName(_ args: Arguments) throws {
@@ -187,6 +230,8 @@ do {
         try runScan(timeout: args.timeout)
     case "find-exact-name":
         try findExactName(args)
+    case "inspect-location":
+        try inspectLocation(args)
     case "delete-exact-name":
         try deleteExactName(args)
     default:

@@ -5,9 +5,10 @@ struct IPhoneDedupeMacApp: App {
     var body: some Scene {
         WindowGroup("iPhone Dedupe") {
             MediaBrowserView(autoScanOnLaunch: CommandLine.arguments.contains("--auto-scan"))
-                .frame(minWidth: 1180, minHeight: 740)
+                .frame(width: 1280, height: 760)
         }
         .windowStyle(.titleBar)
+        .windowResizability(.contentSize)
         .commands {
             CommandGroup(replacing: .newItem) {}
         }

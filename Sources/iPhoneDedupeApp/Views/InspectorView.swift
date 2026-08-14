@@ -65,14 +65,20 @@ struct InspectorView: View {
     }
 
     private func metadata(for item: MediaBrowserViewModel.MediaItem) -> some View {
-        List {
+        let metadata = viewModel.metadataSummary(for: item)
+        return List {
             Section("Metadata") {
                 row("Kind", item.model.kind)
                 row("Size", ByteCountFormatter.string(fromByteCount: item.model.size, countStyle: .file))
                 row("Timestamp", item.model.timestamp ?? "Unknown")
                 row("Width", item.model.width.map(String.init) ?? "Unknown")
                 row("Height", item.model.height.map(String.init) ?? "Unknown")
-                row("Location", item.model.location ?? "Unknown")
+                row("Location", metadata?.location ?? item.model.location ?? "Loading")
+                row("Aperture", metadata?.aperture ?? "Loading")
+                row("Color Space", metadata?.colorSpace ?? "Loading")
+                row("Shutter", metadata?.shutterSpeed ?? "Loading")
+                row("Maker", metadata?.maker ?? "Loading")
+                row("Model", metadata?.model ?? "Loading")
                 row("Duration", durationText(item.model.duration))
                 row("RAW", item.model.isRaw ? "Yes" : "No")
                 row("High FPS", item.model.isHighFramerate ? "Yes" : "No")
