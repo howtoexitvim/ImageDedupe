@@ -60,7 +60,48 @@ final class MediaBrowserViewModel: ObservableObject {
     var onSortChanged: ((MediaSortField, DeduperCore.SortOrder) -> Void)?
 
     @Published var reviewScope: MediaReviewScope = .allMedia
-    @Published var searchText = ""
+    /// What the user has typed. Bound directly to the search field so typing always feels
+    /// immediate.
+    @Published var searchText = "" {
+        didSet {
+            guard searchText != oldValue else { return }
+            scheduleSearchApply()
+        }
+    }
+
+    /// The query the catalog is actually filtered by. Trails `searchText` by the debounce
+    /// interval so a 4,000-item derivation does not run on every keystroke.
+    @Published private(set) var appliedSearchText = ""
+
+    /// How long typing must pause before the query is applied.
+    static let searchDebounceInterval: Duration = .milliseconds(180)
+
+    private var searchDebounceTask: Task<Void, Never>?
+
+    private func scheduleSearchApply() {
+        // Cancelling supersedes the previous pending query rather than queueing another.
+        searchDebounceTask?.cancel()
+        let pending = searchText
+        searchDebounceTask = Task { [weak self] in
+            try? await Task.sleep(for: Self.searchDebounceInterval)
+            guard !Task.isCancelled, let self, self.searchText == pending else { return }
+            self.applySearchText(pending)
+        }
+    }
+
+    /// Applies the pending query immediately, for tests and for anything that must not wait
+    /// for the debounce (a scan publishing a new catalog, for example).
+    func applySearchText(_ text: String) {
+        searchDebounceTask?.cancel()
+        searchDebounceTask = nil
+        guard appliedSearchText != text else { return }
+        appliedSearchText = text
+        refreshVisibleOrder()
+    }
+
+    func flushPendingSearch() {
+        applySearchText(searchText)
+    }
     @Published var sortField: MediaSortField = .timestamp
     @Published var sortOrder: DeduperCore.SortOrder = .descending
     @Published private(set) var viewMode: ViewMode = .list
@@ -160,7 +201,7 @@ final class MediaBrowserViewModel: ObservableObject {
         CatalogKey(
             catalogVersion: catalogVersion,
             scope: reviewScope,
-            searchText: searchText,
+            searchText: appliedSearchText,
             sortField: sortField,
             sortOrder: sortOrder
         )
@@ -188,7 +229,7 @@ final class MediaBrowserViewModel: ObservableObject {
 
         let scopedModels = reviewScope.apply(to: allItems.map(\.model), duplicatePlan: duplicatePlan)
         let scopedIDs = Set(scopedModels.map(\.id))
-        let smartSearch = MediaSearchQuery(searchText)
+        let smartSearch = MediaSearchQuery(appliedSearchText)
         let searchedItems = allItems.filter { scopedIDs.contains($0.id) && smartSearch.matches($0.model) }
         let query = MediaQuery(
             filters: [],

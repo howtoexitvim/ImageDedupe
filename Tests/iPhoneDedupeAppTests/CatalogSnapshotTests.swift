@@ -46,6 +46,7 @@ final class CatalogSnapshotTests: XCTestCase {
     func testSnapshotUpdatesWhenSearchChanges() {
         let viewModel = viewModel(count: 100)
         viewModel.searchText = "IMG_0007"
+        viewModel.flushPendingSearch()
 
         XCTAssertEqual(viewModel.visibleItems.map(\.model.name), ["IMG_0007.HEIC"])
     }
@@ -111,6 +112,8 @@ final class CatalogSnapshotTests: XCTestCase {
         let before = viewModel.catalogDerivationCount
 
         viewModel.searchText = "IMG_01"
+
+        viewModel.flushPendingSearch()
         _ = viewModel.visibleItems
         _ = viewModel.visibleItems
         _ = viewModel.visibleItems
@@ -141,6 +144,7 @@ final class CatalogSnapshotTests: XCTestCase {
 
         let start = Date()
         viewModel.searchText = "IMG_2"
+        viewModel.flushPendingSearch()
         _ = viewModel.visibleItems
         let elapsed = Date().timeIntervalSince(start)
 
