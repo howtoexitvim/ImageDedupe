@@ -82,12 +82,13 @@ enum MediaTableColumn: String, CaseIterable {
         }
     }
 
-    var alignment: NSTextAlignment {
-        switch self {
-        case .size, .duration: return .right
-        default: return .left
-        }
-    }
+    /// Every column reads from the leading edge.
+    ///
+    /// Size and Duration were right-aligned, on the usual reasoning that numerals compare
+    /// better when their digits line up. In a list whose other columns are all left-aligned
+    /// that put a ragged gap in the middle of each row, and the user asked for one
+    /// consistent edge instead.
+    var alignment: NSTextAlignment { .left }
 
     /// Name is the column that absorbs leftover width, matching Finder.
     var isFlexible: Bool { self == .name }
@@ -113,6 +114,10 @@ enum MediaTableColumn: String, CaseIterable {
 enum MediaTableMetrics {
     static let minimumRowHeight: CGFloat = 24
     static let rowVerticalPadding: CGFloat = 10
+
+    /// Height of a duplicate group's header row. Fixed, and independent of thumbnail size:
+    /// a header carries one line of text whatever the tiles are scaled to.
+    static let groupHeaderHeight: CGFloat = 24
 
     static func rowHeight(thumbnailSide: Double) -> CGFloat {
         max(minimumRowHeight, CGFloat(thumbnailSide) + rowVerticalPadding)

@@ -278,6 +278,42 @@ final class ScrollIntoViewTests: XCTestCase {
         XCTAssertGreaterThan(afterScroll.height, beforeScroll.height)
         XCTAssertEqual(afterScroll.minY, anchor.y)
     }
+
+    /// The overlay draws a rect that was computed in the collection view's flipped
+    /// document space, so the overlay must be flipped too.
+    ///
+    /// When it was not, `draw(_:)` measured `marqueeRect.y` from the bottom of a
+    /// document-sized view while the rect measured it from the top. That mirrors the
+    /// rectangle about the document's vertical midpoint, which is the pointer offset
+    /// reported on 2026-08-15: small near the middle, hundreds of points near either end,
+    /// and growing with the length of the catalog.
+    @MainActor
+    func testMarqueeOverlaySharesTheFlippedDocumentSpace() {
+        XCTAssertTrue(
+            MediaMarqueeOverlayView().isFlipped,
+            "An unflipped overlay mirrors the marquee vertically against a flipped grid."
+        )
+        XCTAssertTrue(
+            NSCollectionView().isFlipped,
+            "This test only means anything while the document view is flipped."
+        )
+    }
+
+    /// The mirroring an unflipped overlay produced, stated as arithmetic so the size of the
+    /// defect is on record: the further the drag is from the document's midpoint, the
+    /// further the drawn rectangle lands from the pointer.
+    func testUnflippedOverlayWouldMirrorTheMarqueeAboutTheDocumentMidpoint() {
+        let documentHeight: CGFloat = 4000
+        let rect = MediaScrollGeometry.marqueeRect(
+            from: NSPoint(x: 40, y: 200),
+            to: NSPoint(x: 240, y: 400)
+        )
+
+        // What an unflipped view draws when handed a flipped rect.
+        let mirroredMinY = documentHeight - rect.maxY
+        XCTAssertEqual(mirroredMinY, 3600)
+        XCTAssertEqual(mirroredMinY - rect.minY, 3400, "The offset the user sees.")
+    }
 }
 
 /// Stands in for a clip view enclosing a table or collection view, both of which are

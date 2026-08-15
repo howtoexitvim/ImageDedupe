@@ -58,6 +58,32 @@ struct OperationResultRecord: Codable, Equatable, Identifiable, Sendable {
     }
 
     var hasIssues: Bool { !failures.isEmpty || !canceledFilenames.isEmpty }
+
+    /// Whether this result is worth interrupting the user with.
+    ///
+    /// Distinct from `hasIssues`. With automatic post-delete verification disabled, every
+    /// delete records `verificationPending`, which counts as a failure — so a perfectly
+    /// clean delete was popping the Results sheet every time and reporting files that were
+    /// in fact removed as "Verification pending". Only a real framework failure or
+    /// cancellation deserves the interruption; pending-verification records stay reviewable
+    /// in Results without presenting themselves.
+    var deservesAttention: Bool {
+        if !canceledFilenames.isEmpty { return true }
+        guard let audit = deleteAudit else { return !failures.isEmpty }
+        // A framework failure is still a failure even when the audit could not be verified,
+        // so consult the submission result rather than the verification outcome alone.
+        if let summary = audit.frameworkSummary, !summary.failed.isEmpty {
+            return true
+        }
+        return audit.items.contains { item in
+            switch item.outcome {
+            case .frameworkFailed, .stillPresent, .ambiguous:
+                return true
+            case .confirmedRemoved, .canceled, .verificationPending:
+                return false
+            }
+        }
+    }
     var shouldPersist: Bool { hasIssues || deleteAudit != nil }
     var isPendingDeleteAudit: Bool { deleteAudit?.verificationState == .pending }
 

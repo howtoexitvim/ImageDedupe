@@ -32,6 +32,11 @@ private struct Arguments {
     let destination: URL?
     let delete: Bool
     let confirmed: Bool
+    /// Seconds `double-scan` waits between its two scans, so a photo can be added or
+    /// removed on the device in between. Without a mutation the two scans are identical
+    /// whether or not the second one actually re-enumerated, which is what made the
+    /// staleness question unanswerable from counts alone.
+    let pauseSeconds: TimeInterval
 
     static func parse(_ raw: [String]) throws -> Arguments {
         guard let command = raw.first else {
@@ -43,6 +48,7 @@ private struct Arguments {
         var destination: URL?
         var delete = false
         var confirmed = false
+        var pauseSeconds: TimeInterval = 0
         var index = 1
 
         while index < raw.count {
@@ -66,6 +72,12 @@ private struct Arguments {
                 }
                 destination = URL(fileURLWithPath: raw[index + 1])
                 index += 2
+            case "--pause-seconds":
+                guard index + 1 < raw.count else {
+                    throw CommandError.missingValue(arg)
+                }
+                pauseSeconds = TimeInterval(raw[index + 1]) ?? pauseSeconds
+                index += 2
             case "--delete":
                 delete = true
                 index += 1
@@ -83,7 +95,8 @@ private struct Arguments {
             timeout: timeout,
             destination: destination,
             delete: delete,
-            confirmed: confirmed
+            confirmed: confirmed,
+            pauseSeconds: pauseSeconds
         )
     }
 }
@@ -119,6 +132,39 @@ private func scanWithRetry(
         }
     }
     throw lastError ?? DeviceMediaError.noDevice
+}
+
+@MainActor
+private func runDoubleScan(timeout: TimeInterval, pauseSeconds: TimeInterval) async throws {
+    let gateway = ImageCaptureDeviceGateway()
+    let firstStart = Date()
+    let first = try await gateway.scan(timeout: .seconds(timeout))
+    print("firstScan=\(first.files.count) seconds=\(String(format: "%.2f", Date().timeIntervalSince(firstStart)))")
+
+    if pauseSeconds > 0 {
+        // Equal counts prove nothing on their own, so the operator is given a window to
+        // change the device. The set difference below is the actual evidence.
+        print("pausing=\(Int(pauseSeconds))s — add or delete a photo on the iPhone now")
+        try? await Task.sleep(nanoseconds: UInt64(pauseSeconds * 1_000_000_000))
+    }
+
+    let secondStart = Date()
+    do {
+        let second = try await gateway.scan(timeout: .seconds(timeout))
+        print("secondScan=\(second.files.count) seconds=\(String(format: "%.2f", Date().timeIntervalSince(secondStart)))")
+
+        let before = Set(first.files.map(\.model.name))
+        let after = Set(second.files.map(\.model.name))
+        let added = after.subtracting(before).sorted()
+        let removed = before.subtracting(after).sorted()
+        print("added=\(added.count) removed=\(removed.count)")
+        for name in added.prefix(10) { print("  +\(name)") }
+        for name in removed.prefix(10) { print("  -\(name)") }
+        // The bottom line: did the second scan observe the device as it is now?
+        print("secondScanSawDeviceChanges=\(!added.isEmpty || !removed.isEmpty)")
+    } catch {
+        print("secondScanFailed=\(error) seconds=\(String(format: "%.2f", Date().timeIntervalSince(secondStart)))")
+    }
 }
 
 @MainActor
@@ -231,10 +277,22 @@ private func deleteExactName(_ args: Arguments) async throws {
     print("deleteSuccessful=\(summary.successful.count)")
     print("deleteFailed=\(summary.failed.count)")
     print("deleteCanceled=\(summary.canceled.count)")
-    let after = try await scanWithRetry(gateway: gateway, timeout: args.timeout)
-    let remaining = after.files.filter { $0.model.name == targetName }
-    print("scannedAfter=\(after.files.count)")
-    print("remainingExactMatches=\(remaining.count)")
+
+    // Evidence from the device's own removal notification, which the app uses to confirm a
+    // delete without rescanning the whole catalog. Reported here so the fast path can be
+    // measured against the authoritative rescan below.
+    let observed = gateway.observedRemovals
+    let provenByCallback = matches.filter { observed.contains($0.token.objectHandle) }
+    print("observedRemovalEvidence=\(provenByCallback.count) of \(matches.count)")
+
+    // Deliberately not rescanning on this gateway. ImageCaptureCore delivers a catalog once
+    // per device object, so an in-process scan after a delete replays the snapshot taken
+    // when the session opened and still lists the file that was just removed — measured
+    // reporting `remainingExactMatches=1` for a delete that a fresh process confirmed had
+    // worked. Only a new process can answer this, so the tool says so rather than printing
+    // a number that looks like evidence and is not.
+    print("postDeleteVerification=requires-fresh-process")
+    print("verifyWith=iPhoneDedupeVerifier find-exact-name --target-name \(targetName)")
 }
 
 @MainActor
@@ -290,6 +348,20 @@ do {
     switch args.command {
     case "scan":
         try await runScan(timeout: args.timeout)
+    case "flow-check":
+        await FlowCheck.run(
+            timeout: args.timeout,
+            destination: args.destination ?? URL(fileURLWithPath: NSTemporaryDirectory()),
+            deleteTarget: args.targetName,
+            confirmedDelete: args.delete && args.confirmed
+        )
+    case "session-check":
+        await SessionCheck.run(timeout: args.timeout, pauseSeconds: args.pauseSeconds)
+    case "double-scan":
+        // Diagnostic: isolates whether a second scan on the same gateway completes, with no
+        // delete involved. A one-file delete took minutes because its verification rescan
+        // never received `deviceDidBecomeReady`, and this separates that from the delete.
+        try await runDoubleScan(timeout: args.timeout, pauseSeconds: args.pauseSeconds)
     case "find-exact-name":
         try await findExactName(args)
     case "inspect-location":

@@ -9,6 +9,7 @@ public actor DeviceCommandScheduler {
     public enum AcquireError: Error, Equatable, LocalizedError, Sendable {
         case generationCanceled
         case invalidated
+        case cancelling
 
         public var errorDescription: String? {
             switch self {
@@ -16,6 +17,8 @@ public actor DeviceCommandScheduler {
                 "This request belongs to an older device scan."
             case .invalidated:
                 "The device gateway stopped after an unacknowledged operation. Reopen the app before retrying."
+            case .cancelling:
+                "The previous device operation is still being canceled. Try again in a moment."
             }
         }
     }
@@ -40,7 +43,23 @@ public actor DeviceCommandScheduler {
     private var highPriorityWaiters: [Waiter] = []
     private var lowPriorityWaiters: [Waiter] = []
     private var canceledGenerations: Set<UUID> = []
+
+    /// Insertion order for `canceledGenerations`, so the oldest can be forgotten.
+    private var canceledGenerationOrder: [UUID] = []
+
+    /// Only enough history to catch stragglers from recently superseded scans.
+    private static let maximumCanceledGenerations = 4
+
+    /// Permanent latch. Set only when a framework operation was never acknowledged, so the
+    /// device may still be mid-command and no further submission is safe.
     private var isInvalidated = false
+
+    /// Temporary hold while a cancellation settles.
+    ///
+    /// A user-initiated Cancel is not the same as an unacknowledged operation. Latching the
+    /// gateway for an acknowledged cancel is what made one Download Cancel or Delete Cancel
+    /// permanently break downloads, previews, delete, and rescan until relaunch.
+    private var isCancelling = false
 
     private(set) var activeLease: Lease?
 
@@ -53,6 +72,9 @@ public actor DeviceCommandScheduler {
     public func acquire(priority: Priority, generation: UUID?) async throws -> Lease {
         if isInvalidated {
             throw AcquireError.invalidated
+        }
+        if isCancelling {
+            throw AcquireError.cancelling
         }
         if let generation, canceledGenerations.contains(generation) {
             throw AcquireError.generationCanceled
@@ -85,10 +107,36 @@ public actor DeviceCommandScheduler {
         startNextCommand()
     }
 
+    /// Rejects work already queued for a superseded generation.
+    ///
+    /// The set is bounded and ordered: it only needs to catch requests still in flight from
+    /// a scan that has just been replaced. Retaining every generation forever made this a
+    /// second one-way latch — one canceled Download poisoned the current catalog's
+    /// generation, so later Download, preview, and Delete requests all failed with
+    /// `This request belongs to an older device scan.`
     public func cancelQueued(generation: UUID) {
-        canceledGenerations.insert(generation)
+        if !canceledGenerations.contains(generation) {
+            canceledGenerations.insert(generation)
+            canceledGenerationOrder.append(generation)
+        }
+        while canceledGenerationOrder.count > Self.maximumCanceledGenerations {
+            canceledGenerations.remove(canceledGenerationOrder.removeFirst())
+        }
         rejectWaiters(in: &highPriorityWaiters, generation: generation)
         rejectWaiters(in: &lowPriorityWaiters, generation: generation)
+    }
+
+    /// Allows a generation to be used again after its in-flight work was cleared.
+    ///
+    /// A canceled operation does not invalidate the catalog it belonged to, so the user
+    /// retrying against the same visible items must be admitted.
+    public func reinstate(generation: UUID) {
+        canceledGenerations.remove(generation)
+        canceledGenerationOrder.removeAll { $0 == generation }
+    }
+
+    var canceledGenerationCount: Int {
+        canceledGenerations.count
     }
 
     public func invalidate() {
@@ -98,8 +146,38 @@ public actor DeviceCommandScheduler {
         rejectAllWaiters(in: &lowPriorityWaiters)
     }
 
+    /// Holds new submissions while a timed-out read is torn down.
+    ///
+    /// Scan, thumbnail, and metadata issue no mutating command, so an unfinished one leaves
+    /// nothing uncertain on the device and must stay retryable. Latching here is what made a
+    /// timed-out post-delete verification scan poison every following retry with
+    /// `invalidated`, so the delete could never be verified without relaunching.
+    public func suspendForReadTimeout() {
+        suspendForCancellation()
+    }
+
+    /// Holds new submissions while a user-initiated cancellation settles.
+    ///
+    /// Queued work is rejected so nothing is submitted on top of a command being torn down,
+    /// but unlike `invalidate()` this is reversible.
+    public func suspendForCancellation() {
+        guard !isCancelling else { return }
+        isCancelling = true
+        rejectAllWaiters(in: &highPriorityWaiters, with: .cancelling)
+        rejectAllWaiters(in: &lowPriorityWaiters, with: .cancelling)
+    }
+
+    /// Releases the hold once the framework acknowledged the cancellation.
+    ///
+    /// Deliberately cannot clear `isInvalidated`: if the operation went unacknowledged, the
+    /// device state is genuinely uncertain and the permanent latch must survive.
+    public func resumeAfterAcknowledgedCancellation() {
+        isCancelling = false
+        startNextCommand()
+    }
+
     private func startNextCommand() {
-        guard activeLease == nil else {
+        guard activeLease == nil, !isInvalidated, !isCancelling else {
             return
         }
 
@@ -140,9 +218,12 @@ public actor DeviceCommandScheduler {
         waiters = retained
     }
 
-    private func rejectAllWaiters(in waiters: inout [Waiter]) {
+    private func rejectAllWaiters(
+        in waiters: inout [Waiter],
+        with error: AcquireError = .invalidated
+    ) {
         for waiter in waiters {
-            waiter.continuation.resume(returning: .failure(.invalidated))
+            waiter.continuation.resume(returning: .failure(error))
         }
         waiters.removeAll()
     }

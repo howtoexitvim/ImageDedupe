@@ -361,4 +361,16 @@ final class MediaTableViewTests: XCTestCase {
         let far = abs(MediaTableMetrics.autoScrollVelocity(pointerY: 18, viewportHeight: 400))
         XCTAssertGreaterThan(near, far)
     }
+
+    /// Every column reads from the leading edge. Size and Duration were right-aligned,
+    /// which put a ragged gap mid-row in a list whose other columns all start at the left.
+    func testEveryColumnIsLeftAligned() {
+        for column in MediaTableColumn.allCases {
+            XCTAssertEqual(
+                column.alignment,
+                .left,
+                "\(column) must read from the leading edge like every other column."
+            )
+        }
+    }
 }

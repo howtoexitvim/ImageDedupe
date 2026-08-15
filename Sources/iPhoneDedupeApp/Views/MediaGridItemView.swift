@@ -124,6 +124,7 @@ final class MediaGridItemView: NSCollectionViewItem {
         isBrowserFocused: Bool,
         isImported: Bool,
         isDuplicateCandidate: Bool,
+        isKeptCopy: Bool = false,
         onToggle: @escaping () -> Void
     ) {
         thumbnailHeightConstraint.constant = thumbnailHeight
@@ -133,7 +134,26 @@ final class MediaGridItemView: NSCollectionViewItem {
         checkbox.state = isActionSelected ? .on : .off
         checkbox.setAccessibilityLabel("Select \(name)")
         importedBadge.isHidden = !isImported
-        duplicateBadge.isHidden = !isDuplicateCandidate
+        // One badge, two meanings, so the tile gains no extra layout: the copy that will
+        // survive is marked distinctly from the copies that will go. Both copies of a
+        // duplicate are now shown, so telling them apart at a glance is the whole point.
+        if isKeptCopy {
+            duplicateBadge.image = NSImage(
+                systemSymbolName: "checkmark.seal.fill",
+                accessibilityDescription: "Kept copy"
+            )
+            duplicateBadge.contentTintColor = .systemBlue
+            duplicateBadge.toolTip = "This copy is kept."
+            duplicateBadge.isHidden = false
+        } else {
+            duplicateBadge.image = NSImage(
+                systemSymbolName: "exclamationmark.triangle.fill",
+                accessibilityDescription: "Duplicate candidate"
+            )
+            duplicateBadge.contentTintColor = .systemOrange
+            duplicateBadge.toolTip = "A duplicate of a copy kept elsewhere."
+            duplicateBadge.isHidden = !isDuplicateCandidate
+        }
         self.onToggle = onToggle
 
         container.isActionSelected = isActionSelected

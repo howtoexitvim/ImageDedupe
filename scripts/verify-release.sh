@@ -35,9 +35,22 @@ print -r -- "$entitlements" | grep -Eq 'com\.apple\.security\.cs\.(allow-jit|all
     exit 1
 }
 
-executable_count="$(find "$contents_path/MacOS" -type f -perm -111 | wc -l | tr -d ' ')"
-[[ "$executable_count" == "1" ]] || {
-    print -u2 "release verification failed: unexpected executable count $executable_count"
+# The bundle ships exactly two executables: the app, and the device helper each scan runs
+# in a fresh process. Naming them beats counting them — a count of two would also be
+# satisfied by an unexpected binary that displaced the helper.
+expected_executables="iPhoneDedupeApp
+iPhoneDedupeHelper"
+actual_executables="$(find "$contents_path/MacOS" -type f -perm -111 -exec basename {} \; | sort)"
+[[ "$actual_executables" == "$expected_executables" ]] || {
+    print -u2 "release verification failed: unexpected executables in MacOS:"
+    print -u2 "$actual_executables"
+    exit 1
+}
+
+# The helper is nested code and must carry its own valid signature; if the outer bundle
+# were signed first, this is what would catch it.
+codesign --verify --strict "$contents_path/MacOS/iPhoneDedupeHelper" || {
+    print -u2 "release verification failed: the device helper is not validly signed"
     exit 1
 }
 

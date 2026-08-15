@@ -81,10 +81,15 @@ struct DeleteAudit: Codable, Equatable, Sendable {
 }
 
 enum DeleteReconciler {
+    /// - Parameter keptFingerprints: fingerprints the caller deliberately kept a copy of,
+    ///   i.e. the `keep` side of a duplicate group. A surviving file with one of these
+    ///   fingerprints is the intended result of deduplication rather than a suspicious
+    ///   leftover, so it is reported as removed instead of ambiguous.
     static func reconcile(
         snapshot: DeletePlanSnapshot,
         summary: DeviceGatewayDeleteSummary,
         catalog: DeviceCatalogSnapshot,
+        keptFingerprints: Set<DeviceFileFingerprint> = [],
         date: Date = Date()
     ) -> DeleteAudit {
         if let expectedIdentity = snapshot.deviceIdentityHash {
@@ -97,17 +102,26 @@ enum DeleteReconciler {
                 )
             }
         }
-        let presentByHandle = Dictionary(grouping: catalog.files, by: { $0.token.objectHandle })
         let presentFingerprints = Dictionary(grouping: catalog.files, by: { $0.token.fingerprint })
         let failedReasons = Dictionary(uniqueKeysWithValues: summary.failed.map { ($0.token, $0.reason) })
         let canceled = Set(summary.canceled)
         let successful = Set(summary.successful)
 
+        // Presence is decided by **fingerprint**, never by PTP object handle.
+        //
+        // A handle is a slot, not an identity: the device reassigns handles freely once a
+        // file is removed, so after a successful delete some unrelated file routinely
+        // occupies the handle that was just vacated. Keying on handles produced two false
+        // failures on 2026-08-15 for deletes that a fresh-process scan confirmed had
+        // worked — `IMG_5090`, `IMG_5091`, and `WUAS3477` all reported `exactMatches=0`
+        // while the audit called them "Ambiguous — the device reused this object handle"
+        // or "Still present". The fingerprint (name, kind, size, timestamp) is what
+        // actually identifies the file the user asked to remove.
         let items = snapshot.items.map { planned -> DeleteAudit.Item in
             let outcome: DeleteAudit.Item.Outcome
             let reason: String?
-            let sameHandle = presentByHandle[planned.token.objectHandle] ?? []
-            if sameHandle.contains(where: { $0.token.fingerprint == planned.token.fingerprint }) {
+            let survivors = presentFingerprints[planned.token.fingerprint] ?? []
+            if !survivors.isEmpty, !keptFingerprints.contains(planned.token.fingerprint) {
                 if let failure = failedReasons[planned.token] {
                     outcome = .frameworkFailed
                     reason = failure
@@ -121,12 +135,12 @@ enum DeleteReconciler {
                     outcome = .ambiguous
                     reason = "The item remains, but the framework returned no final classification."
                 }
-            } else if !sameHandle.isEmpty {
-                outcome = .ambiguous
-                reason = "The device reused this object handle for a different file."
-            } else if presentFingerprints[planned.token.fingerprint]?.isEmpty == false {
-                outcome = .ambiguous
-                reason = "A matching file remains under a different device object handle."
+            } else if !survivors.isEmpty {
+                // Deduplication: the caller knew an identical copy was being kept, so a
+                // survivor is the intended outcome. Reporting it as ambiguous made a
+                // correct Duplicates delete look like a failure.
+                outcome = .confirmedRemoved
+                reason = "Removed. An identical copy is kept elsewhere on the device."
             } else {
                 outcome = .confirmedRemoved
                 reason = nil

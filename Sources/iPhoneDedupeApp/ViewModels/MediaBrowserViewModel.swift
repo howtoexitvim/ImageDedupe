@@ -67,38 +67,81 @@ final class MediaBrowserViewModel: ObservableObject {
     @Published var isShowingOperationHistory = false
     private let operationResultStore: OperationResultStore
     typealias ImportPreflight = (URL, [ImportDestinationPreflight.Item]) -> ImportDestinationPreflight.Outcome
+
+    /// The catalog rescan that verifies a delete. Injectable so the verification phase and
+    /// its cancellation can be tested without a device.
+    typealias VerificationScan = @MainActor (Duration) async throws -> DeviceCatalogSnapshot
     typealias InspectorPreviewRequest = (
         DeviceFileToken,
         Int,
         @escaping @Sendable (NSImage?) -> Void
     ) -> Void
-    private let gateway: ImageCaptureDeviceGateway
+    /// Every device command goes through here, and each scan runs a fresh helper process.
+    ///
+    /// ImageCaptureCore enumerates a device once per process and never again, so an
+    /// in-process rescan can only replay the catalog captured when the session opened. That
+    /// is what made new photos invisible until relaunch and left post-delete verification
+    /// with nothing trustworthy to read.
+    private let deviceSession: DeviceSession
     private let stagingManager: ImportStagingManager
     private let importPreflight: ImportPreflight
     private let inspectorPreviewRequest: InspectorPreviewRequest
     private let inspectorPreviewTimeout: Duration
+    private let verificationScan: VerificationScan
+    private let duplicateRulePreferences: DuplicateRulePreferences
+
+    /// The fields that decide two files are duplicates.
+    ///
+    /// Published so Duplicates and the sidebar chooser stay in step. Only ever set through
+    /// `setDuplicateRule`, which recomputes the plan and retires any pending delete.
+    @Published private(set) var duplicateRule: DuplicateRuleSelection = .default
+
+    /// Every copy of each duplicate set, with the surviving one marked.
+    ///
+    /// Duplicates shows all of them, not just the redundant copies, so the user can see
+    /// which copy will survive and compare its metadata before deleting. The default action
+    /// selection is still exactly the redundant copies, so a hundred groups do not become a
+    /// hundred decisions.
+    @Published private(set) var duplicateGroups: [DuplicateGrouping.Group] = []
+
+    /// The ids of the copies each group keeps, so a renderer can mark them.
+    var keptDuplicateIDs: Set<String> {
+        Set(duplicateGroups.compactMap { $0.keptFile?.id })
+    }
+
+    /// Test-only instrumentation proving Retry Verification never resubmits a delete.
+    private(set) var deleteSubmissionCountForTesting = 0
 
     init(
         operationResultStore: OperationResultStore = .applicationSupport(),
-        gateway: ImageCaptureDeviceGateway? = nil,
+        deviceSession: DeviceSession? = nil,
         stagingManager: ImportStagingManager = .applicationCaches(),
         importPreflight: @escaping ImportPreflight = { destination, items in
             ImportDestinationPreflight.inspect(destination: destination, items: items)
         },
         inspectorPreviewTimeout: Duration = .seconds(12),
-        inspectorPreviewRequest: InspectorPreviewRequest? = nil
+        inspectorPreviewRequest: InspectorPreviewRequest? = nil,
+        verificationScan: VerificationScan? = nil,
+        duplicateRulePreferences: DuplicateRulePreferences = DuplicateRulePreferences()
     ) {
-        let resolvedGateway = gateway ?? ImageCaptureDeviceGateway()
-        self.gateway = resolvedGateway
+        let resolvedSession = deviceSession ?? DeviceSession()
+        self.deviceSession = resolvedSession
+        self.duplicateRulePreferences = duplicateRulePreferences
+        self.duplicateRule = duplicateRulePreferences.load()
         self.stagingManager = stagingManager
         self.operationResultStore = operationResultStore
         self.importPreflight = importPreflight
         self.inspectorPreviewTimeout = inspectorPreviewTimeout
+        self.verificationScan = verificationScan ?? { timeout in
+            // A fresh helper process, so verification finally reads the device as it is
+            // rather than the catalog this app captured at launch.
+            try await resolvedSession.scan(timeout: timeout)
+        }
         self.inspectorPreviewRequest = inspectorPreviewRequest ?? { token, maxPixelSize, completion in
             Task { @MainActor in
                 let image: NSImage?
                 do {
-                    let data = try await resolvedGateway.thumbnailData(
+                    let data = try await resolvedSession.thumbnailData(
                         for: token,
                         maxPixelSize: maxPixelSize,
                         timeout: .seconds(12)
@@ -214,7 +257,14 @@ final class MediaBrowserViewModel: ObservableObject {
     @Published var duplicatePlan = DuplicatePlan(keep: [], delete: []) {
         didSet { catalogVersion &+= 1 }
     }
-    @Published var importDestination = FileManager.default.urls(for: .picturesDirectory, in: .userDomainMask).first ?? URL(fileURLWithPath: NSHomeDirectory())
+    /// Changing this re-derives the "already downloaded" badges, since the badge answers
+    /// "is this file in *this* folder?" and the answer changes with the folder.
+    @Published var importDestination = FileManager.default.urls(for: .picturesDirectory, in: .userDomainMask).first ?? URL(fileURLWithPath: NSHomeDirectory()) {
+        didSet {
+            guard importDestination != oldValue else { return }
+            refreshImportedBadgesForDestination()
+        }
+    }
     @Published var lastImportedFileURL: URL?
 
     /// Bounded, cancellable admission for per-item device work. Replaces the unbounded
@@ -308,15 +358,31 @@ final class MediaBrowserViewModel: ObservableObject {
     private func deriveVisibleItems(key: CatalogKey) {
         catalogDerivationCount += 1
 
-        let scopedModels = reviewScope.apply(to: allItems.map(\.model), duplicatePlan: duplicatePlan)
+        let scopedModels = reviewScope.apply(
+            to: allItems.map(\.model),
+            duplicatePlan: duplicatePlan,
+            duplicateGroups: duplicateGroups
+        )
         let scopedIDs = Set(scopedModels.map(\.id))
         let smartSearch = MediaSearchQuery(appliedSearchText)
         let searchedItems = allItems.filter { scopedIDs.contains($0.id) && smartSearch.matches($0.model) }
-        let query = MediaQuery(
-            filters: [],
-            sort: MediaSortDescriptor(field: sortField, order: sortOrder)
-        )
-        let filteredModels = query.apply(to: searchedItems.map(\.model))
+
+        let filteredModels: [DeviceMediaFile]
+        if reviewScope == .duplicates, !duplicateGroups.isEmpty {
+            // Grouping order wins here. Sorting the grouped result by timestamp or name
+            // interleaves the groups again, which is what the user saw: a group's copies
+            // were no longer next to each other, so the pairing was invisible. A group is
+            // only legible as a group when its members are adjacent, and that is the whole
+            // reason Duplicates shows every copy.
+            let surviving = Set(searchedItems.map(\.id))
+            filteredModels = scopedModels.filter { surviving.contains($0.id) }
+        } else {
+            let query = MediaQuery(
+                filters: [],
+                sort: MediaSortDescriptor(field: sortField, order: sortOrder)
+            )
+            filteredModels = query.apply(to: searchedItems.map(\.model))
+        }
         let itemByID = Dictionary(uniqueKeysWithValues: searchedItems.map { ($0.id, $0) })
 
         var items: [MediaItem] = []
@@ -373,13 +439,16 @@ final class MediaBrowserViewModel: ObservableObject {
                 return
             }
             do {
-                let snapshot = try await self.gateway.scan(timeout: .seconds(180))
+                let snapshot = try await self.deviceSession.scan(timeout: .seconds(180))
                 let items = snapshot.files.map { MediaItem(model: $0.model, token: $0.token) }
                 let payload = ScanPayload(
                     deviceName: snapshot.deviceName,
                     deviceIdentityHash: snapshot.deviceIdentityHash,
                     items: items,
-                    plan: DuplicatePlanner.plan(files: items.map(\.model), rule: .nameKindSize)
+                    plan: DuplicatePlanner.plan(
+                        files: items.map(\.model),
+                        definition: self.duplicateRule.definition
+                    )
                 )
                 // A newer scan may have started while this one was running.
                 guard self.operationState.isCurrent(generation: generation) else { return }
@@ -496,11 +565,49 @@ final class MediaBrowserViewModel: ObservableObject {
         }
     }
 
+    /// Selects or clears every redundant copy in one duplicate group.
+    ///
+    /// Driven by the group's header row, so a group of several copies is one click rather
+    /// than one click per file — the tedium the grouped view exists to avoid.
+    ///
+    /// The kept copy is excluded, exactly as it is from Select All: "select this group"
+    /// must never come to mean "delete every copy of this file".
+    func toggleGroupSelection(groupID: String) {
+        guard let group = duplicateGroups.first(where: { $0.id == groupID }) else { return }
+        let redundantIDs = Set(group.redundantFiles.map(\.id))
+        guard !redundantIDs.isEmpty else { return }
+
+        if redundantIDs.isSubset(of: selection.actionSelectedIDs) {
+            selection.actionSelectedIDs.subtract(redundantIDs)
+        } else {
+            selection.actionSelectedIDs.formUnion(redundantIDs)
+        }
+    }
+
+    /// Whether every redundant copy of a group is currently selected, for the header's
+    /// checkbox state.
+    func isGroupFullySelected(groupID: String) -> Bool {
+        guard let group = duplicateGroups.first(where: { $0.id == groupID }) else { return false }
+        let redundantIDs = Set(group.redundantFiles.map(\.id))
+        return !redundantIDs.isEmpty && redundantIDs.isSubset(of: selection.actionSelectedIDs)
+    }
+
     func selectAllVisible() {
         refreshVisibleOrder()
         // Deliberately does not force focus ownership. Command-A while the search field is
         // editing belongs to that text, not to the media browser.
         selection.selectAllVisible()
+
+        // Duplicates now shows the copy that will survive alongside the redundant ones, and
+        // that created a hazard which did not exist while it was hidden: Select All would
+        // sweep up the keepers too, so deleting would remove *both* copies of everything.
+        //
+        // The keepers are dropped from a bulk selection here. A deliberate click on one
+        // still selects it — the user may decide the other copy is the one worth keeping —
+        // but the app never volunteers it.
+        if reviewScope == .duplicates {
+            selection.actionSelectedIDs.subtract(keptDuplicateIDs)
+        }
     }
 
     func clearActionSelection() {
@@ -578,14 +685,30 @@ final class MediaBrowserViewModel: ObservableObject {
         Task { [weak self, destination = importDestination, stagingManager] in
             defer { try? stagingManager.cleanup(stagingSession) }
             guard let self else { return }
-            var summary = await self.gateway.download(
-                items.map(\.token),
-                to: stagingSession,
-                cancellation: cancellation,
-                onProgress: { update in
-                    self.applyOperationProgress(update, for: .importing)
-                }
-            )
+            // The helper stages the bytes; committing them to the user's destination stays
+            // here, where the preflight and the imported-path policy already live.
+            var summary: DeviceGatewayImportSummary
+            do {
+                summary = try await self.deviceSession.download(
+                    items.map(\.token),
+                    stagingDirectory: stagingSession.directory,
+                    onProgress: { update in
+                        Task { @MainActor in
+                            self.applyOperationProgress(update, for: .importing)
+                        }
+                    }
+                )
+            } catch {
+                summary = DeviceGatewayImportSummary(
+                    failed: items.map {
+                        DeviceOperationFailure(
+                            token: $0.token,
+                            filename: $0.model.name,
+                            reason: error.localizedDescription
+                        )
+                    }
+                )
+            }
             let itemByToken = Dictionary(uniqueKeysWithValues: items.map { ($0.token, $0) })
             var committed: [DeviceDownloadSuccess] = []
             for download in summary.successful {
@@ -653,18 +776,28 @@ final class MediaBrowserViewModel: ObservableObject {
         operationCancellation = cancellation
         operationProgress = MediaOperationProgress(kind: .deleting, totalItems: snapshot.items.count)
         status = "Deleting \(snapshot.items.count) item(s)..."
+        deleteSubmissionCountForTesting += 1
         Task { [weak self] in
             guard let self else { return }
             do {
-                let summary = try await self.gateway.delete(
+                let (summary, observedRemovedHandles) = try await self.deviceSession.delete(
                     snapshot.items.map(\.token),
                     confirmed: true,
-                    cancellation: cancellation,
                     onProgress: { update in
-                        self.applyOperationProgress(update, for: .deleting)
+                        Task { @MainActor in
+                            self.applyOperationProgress(update, for: .deleting)
+                        }
                     }
                 )
-                await self.verifyDelete(snapshot: snapshot, summary: summary)
+                // The removal evidence comes back with the summary rather than being read
+                // from the gateway afterwards. Across a process boundary there is no
+                // "afterwards" to read from, and coupling them is also what stops evidence
+                // from one delete being attributed to another.
+                self.beginVerification(
+                    snapshot: snapshot,
+                    summary: summary,
+                    observedRemovedHandles: observedRemovedHandles
+                )
             } catch {
                 let summary = DeviceGatewayDeleteSummary(failed: snapshot.items.map {
                     DeviceOperationFailure(
@@ -673,7 +806,7 @@ final class MediaBrowserViewModel: ObservableObject {
                         reason: error.localizedDescription
                     )
                 })
-                await self.verifyDelete(snapshot: snapshot, summary: summary)
+                self.beginVerification(snapshot: snapshot, summary: summary)
             }
         }
     }
@@ -683,9 +816,48 @@ final class MediaBrowserViewModel: ObservableObject {
               progress.requestCancellation() else {
             return
         }
+        let phase = progress.phase
         operationProgress = progress
         status = progress.detail
         _ = operationCancellation?.cancel()
+        // The work now runs in the helper process, so the in-process cancellation object
+        // alone would signal nothing. The helper handles `cancel` off its request loop, so
+        // it acts on this immediately rather than after the operation it interrupts.
+        Task { [deviceSession] in await deviceSession.cancel() }
+
+        // Cancel must settle the UI within a bounded time even if ImageCaptureCore never
+        // acknowledges. During verification the owning task is canceled directly, which is
+        // what the old code was missing: it signalled only the previous submission's
+        // cancellation object, so the verification scan ran on to its full timeout.
+        if phase == .verifying {
+            verificationTask?.cancel()
+        }
+        startCancellationSettleWatchdog()
+    }
+
+    /// Backstop for a cancel the framework never answers.
+    ///
+    /// The operation is settled as verification-pending rather than as canceled-and-clean,
+    /// because a silent framework leaves the current item genuinely uncertain.
+    private func startCancellationSettleWatchdog() {
+        let generation = operationState.generation
+        Task { @MainActor [weak self] in
+            try? await Task.sleep(for: Self.cancellationSettleBound)
+            guard let self,
+                  self.operationState.isCurrent(generation: generation),
+                  let progress = self.operationProgress,
+                  progress.isCanceling else {
+                return
+            }
+            self.verificationTask?.cancel()
+            self.verificationTask = nil
+            self.activeVerificationID = nil
+            self.operationProgress = nil
+            self.operationCancellation = nil
+            self.operationState.finish()
+            self.status = "Canceled without device acknowledgement. Rescanning to show the device's actual state."
+            self.refreshAfterCancellation()
+        }
     }
 
     func showOperationHistory() {
@@ -706,6 +878,13 @@ final class MediaBrowserViewModel: ObservableObject {
     }
 
     func retryDeleteVerification(recordID: UUID) {
+        // While a rescan can only replay the session's stale catalog, verification cannot
+        // tell the truth: it re-lists files that were already deleted and puts their rows
+        // back. Refusing here is better than resurrecting them. See `docs/todo.md` P0-1.
+        guard Self.verifiesDeletesAutomatically else {
+            status = "Verification needs a fresh catalog. Scan the device, then retry."
+            return
+        }
         guard !operationState.isBusy,
               let audit = operationHistory.first(where: { $0.id == recordID })?.deleteAudit,
               audit.verificationState == .pending,
@@ -713,11 +892,17 @@ final class MediaBrowserViewModel: ObservableObject {
             return
         }
         status = "Verifying the saved delete audit…"
-        Task { [weak self] in
-            guard let self else { return }
-            let summary = audit.frameworkSummary ?? DeviceGatewayDeleteSummary()
-            await self.verifyDelete(snapshot: audit.snapshot, summary: summary)
-        }
+        // Scan-only by construction: this path never calls `deviceSession.delete`.
+        operationProgress = MediaOperationProgress(
+            kind: .deleting,
+            totalItems: audit.snapshot.items.count
+        )
+        operationCancellation = DeviceOperationCancellation()
+        beginVerification(
+            snapshot: audit.snapshot,
+            summary: audit.frameworkSummary ?? DeviceGatewayDeleteSummary(),
+            isUserRequested: true
+        )
     }
 
     /// Requests the destructive confirmation sheet. Does not delete anything.
@@ -754,6 +939,56 @@ final class MediaBrowserViewModel: ObservableObject {
         NSWorkspace.shared.activateFileViewerSelecting([lastImportedFileURL])
     }
 
+    /// Applies a new duplicate rule, recomputes the plan, and retires any pending delete.
+    ///
+    /// The pending snapshot must not survive: it freezes a specific set of files chosen
+    /// under the previous rule, so keeping it would let the confirmation describe one set
+    /// while the rule now means another.
+    func setDuplicateRule(_ rule: DuplicateRuleSelection) {
+        guard rule != duplicateRule else { return }
+        duplicateRule = rule
+        duplicateRulePreferences.save(rule)
+        pendingDeleteSnapshot = nil
+        isConfirmingDelete = false
+        duplicatePlan = DuplicatePlanner.plan(
+            files: allItems.map(\.model),
+            definition: rule.definition
+        )
+        duplicateGroups = DuplicateGrouping.groups(
+            files: allItems.map(\.model),
+            definition: rule.definition
+        )
+        refreshVisibleOrder()
+        status = "Duplicate rule: \(rule.summary). \(duplicatePlan.delete.count) redundant copies."
+    }
+
+    /// Ticks or unticks one field. Every combination is permitted, including none.
+    func toggleDuplicateRuleField(_ field: MediaField) {
+        setDuplicateRule(duplicateRule.toggling(field))
+    }
+
+    func isDuplicateRuleFieldSelected(_ field: MediaField) -> Bool {
+        duplicateRule.fields.contains(field)
+    }
+
+    /// Recomputes the plan from the current rule, for tests that set `allItems` directly.
+    func setSortForTesting(field: MediaSortField, order: DeduperCore.SortOrder) {
+        sortField = field
+        sortOrder = order
+        refreshVisibleOrder()
+    }
+
+    func recomputeDuplicatePlanForTesting() {
+        duplicatePlan = DuplicatePlanner.plan(
+            files: allItems.map(\.model),
+            definition: duplicateRule.definition
+        )
+        duplicateGroups = DuplicateGrouping.groups(
+            files: allItems.map(\.model),
+            definition: duplicateRule.definition
+        )
+    }
+
     func selectReviewScope(_ scope: MediaReviewScope) {
         reviewScope = scope
         refreshVisibleOrder()
@@ -778,7 +1013,7 @@ final class MediaBrowserViewModel: ObservableObject {
             }
             var loaded: [(id: String, image: NSImage)] = []
             for item in missing {
-                guard let data = try? await self.gateway.thumbnailData(
+                guard let data = try? await self.deviceSession.thumbnailData(
                     for: item.token,
                     maxPixelSize: 512,
                     timeout: .seconds(6)
@@ -923,9 +1158,18 @@ final class MediaBrowserViewModel: ObservableObject {
         inspectorPreviewTotalCost = 0
     }
 
+    /// - Parameter preservingImportedDownloads: carries the "already downloaded" badges
+    ///   across the new catalog, matching by fingerprint rather than by item id.
+    ///
+    ///   This defaulted to `false`, so a user-pressed Scan cleared every badge even though
+    ///   the files were still sitting in the destination. The user then pressed Download
+    ///   again and was told "Import blocked", because the preflight could see what the
+    ///   badge no longer showed. The badge is only a view of what is on disk, and
+    ///   `reconcileImportedDownloads` already drops any whose file has gone, so carrying it
+    ///   across a scan is both safe and what the user expects.
     private func applyScanPayload(
         _ payload: ScanPayload,
-        preservingImportedDownloads: Bool = false
+        preservingImportedDownloads: Bool = true
     ) {
         var importedURLsByFingerprint: [DeviceFileFingerprint: URL] = [:]
         if preservingImportedDownloads {
@@ -939,11 +1183,21 @@ final class MediaBrowserViewModel: ObservableObject {
         deviceIdentityHash = payload.deviceIdentityHash
         allItems = payload.items
         duplicatePlan = payload.plan
+        duplicateGroups = DuplicateGrouping.groups(
+            files: payload.items.map(\.model),
+            definition: duplicateRule.definition
+        )
         selection = MediaSelectionState()
         // The previous session's outstanding requests are meaningless now.
         thumbnailRequests.cancelAll()
         metadataRequests.cancelAll()
         resetInspectorPreviews()
+        // Drop cached images too, not just the in-flight requests. An id is stable for a
+        // given file, but the device is free to reuse a PTP object handle for a different
+        // file in a later catalog, and a kept image would then be drawn against the wrong
+        // photo. Re-fetching a screen of thumbnails is cheap; showing the wrong picture is
+        // exactly the defect reported on 2026-08-15.
+        purgeThumbnailCache()
         // A scan can land while the user is mid-word. Applying the pending query now keeps
         // the visible field and the filtered catalog in agreement, instead of showing an
         // unfiltered list under a non-empty search box until the debounce fires.
@@ -960,6 +1214,7 @@ final class MediaBrowserViewModel: ObservableObject {
             }
             reconcileImportedDownloads()
         }
+        adoptDownloadsAlreadyInDestination(items: payload.items)
         recoveryAdvice = nil
         status = "Scanned \(payload.items.count) items. Conservative duplicates: \(payload.plan.delete.count)."
         fputs("ui-scan-succeeded: scanned=\(payload.items.count) duplicates=\(payload.plan.delete.count)\n", stderr)
@@ -1003,6 +1258,18 @@ final class MediaBrowserViewModel: ObservableObject {
         }
     }
 
+    /// Drops every cached thumbnail and its bookkeeping.
+    ///
+    /// Used when a new catalog arrives: a PTP object handle may be reused for a different
+    /// file in a later scan, so an image kept across scans can end up drawn against the
+    /// wrong photo.
+    private func purgeThumbnailCache() {
+        thumbnailCache.removeAll()
+        thumbnailCostByID.removeAll()
+        thumbnailAccessOrder.removeAll()
+        thumbnailCacheBytes = 0
+    }
+
     /// Evicts least-recently-used thumbnails until both the count and the memory-cost
     /// limits are satisfied.
     private func trimThumbnailCacheIfNeeded() {
@@ -1032,7 +1299,7 @@ final class MediaBrowserViewModel: ObservableObject {
             guard let self else {
                 return
             }
-            let summary = try? await self.gateway.metadata(for: item.token, timeout: .seconds(30))
+            let summary = try? await self.deviceSession.metadata(for: item.token, timeout: .seconds(30))
             self.cacheMetadata(summary, id: item.id, generation: generation)
         }
     }
@@ -1060,10 +1327,13 @@ final class MediaBrowserViewModel: ObservableObject {
             guard let itemID = requestedIDsByToken[successfulDownload.token] else {
                 continue
             }
-            recordSuccessfulDownload(
-                itemID: itemID,
-                fileURL: destination.appendingPathComponent(successfulDownload.filename)
-            )
+            let fileURL = destination.appendingPathComponent(successfulDownload.filename)
+            // The badge claims a file is on disk, so confirm it is rather than trusting the
+            // summary. A canceled batch settles while a commit is still in flight, and
+            // items reported successful could end up never reaching the destination — which
+            // showed as a green tick on a file that was not there, reported 2026-08-15.
+            guard isExistingRegularFile(fileURL) else { continue }
+            recordSuccessfulDownload(itemID: itemID, fileURL: fileURL)
         }
         status = "Imported \(summary.successful.count) item(s), \(summary.failed.count) failed, \(summary.canceled.count) canceled."
         persistOperationResult(OperationResultRecord(
@@ -1084,37 +1354,313 @@ final class MediaBrowserViewModel: ObservableObject {
         operationProgress = nil
         operationCancellation = nil
         operationState.finish()
+        // A canceled import leaves the catalog and the badges only partly updated, so take
+        // a fresh look rather than leaving the user to press Scan to find out what landed.
+        if !summary.canceled.isEmpty {
+            refreshAfterCancellation()
+        }
     }
 
-    private func verifyDelete(
+    /// How long a verification rescan may run before it is abandoned as pending.
+    ///
+    /// A verification scan now runs in a fresh helper process, which does complete: measured
+    /// at about 1.1 s for ~3,960 items. The bound stays generous enough for a large catalog
+    /// on a busy device while still failing fast rather than blocking the UI, since a
+    /// pending record is an honest outcome and a hung one is not.
+    static let verificationTimeout: Duration = .seconds(30)
+
+    /// Whether a delete automatically rescans to verify.
+    ///
+    /// Back on, now that a rescan can actually observe the device. It was switched off
+    /// because verification could only ever read the catalog captured when the app's single
+    /// ImageCaptureCore session opened, so it could not confirm anything, and forcing a
+    /// fresh enumeration in-process pushed a one-file delete past six minutes.
+    ///
+    /// Verification now runs in a new helper process, which re-enumerates in about a
+    /// second. Restoring this also restores Retry Verification, which is keyed on the same
+    /// flag, and it can no longer resurrect deleted rows from a stale catalog because the
+    /// catalog it reads is current.
+    static let verifiesDeletesAutomatically = true
+
+    /// How long the UI waits for the framework to acknowledge a cancellation before it
+    /// settles anyway. The operation is then recorded as verification-pending.
+    static let cancellationSettleBound: Duration = .seconds(3)
+
+    /// The verification task, owned so Cancel can actually stop it. Previously the
+    /// verification scan consumed no cancellation object and its task was never canceled,
+    /// so Cancel changed the label to `Canceling delete…` while the scan ran to its timeout.
+    private var verificationTask: Task<Void, Never>?
+
+    /// Identifies the verification currently allowed to settle the UI.
+    ///
+    /// A canceled task can still run to its next suspension point and arrive at a terminal
+    /// branch after the cancel watchdog has already settled the operation. Without this,
+    /// that late arrival would persist a second audit record for work the user stopped.
+    private var activeVerificationID: UUID?
+
+    /// Failure reasons that prove no framework command was ever issued.
+    ///
+    /// All of these are decided before submission: either no device was bound, or the
+    /// scheduler refused admission. Nothing reached the iPhone, so there is nothing a
+    /// catalog rescan could tell the user that is not already known.
+    private static let preSubmissionFailureReasons: Set<String> = [
+        DeviceGatewayError.noDevice.localizedDescription,
+        DeviceCommandScheduler.AcquireError.invalidated.localizedDescription,
+        DeviceCommandScheduler.AcquireError.cancelling.localizedDescription,
+        DeviceCommandScheduler.AcquireError.generationCanceled.localizedDescription
+    ]
+
+    /// Whether the framework delete was provably never submitted.
+    ///
+    /// When nothing reached the device there is nothing to verify, so the operation
+    /// finishes promptly and honestly instead of entering a long verification phase.
+    private func wasNeverSubmitted(
         snapshot: DeletePlanSnapshot,
         summary: DeviceGatewayDeleteSummary
-    ) async {
-        do {
-            let catalog = try await gateway.scan(timeout: .seconds(180))
-            let audit = DeleteReconciler.reconcile(
-                snapshot: snapshot,
-                summary: summary,
-                catalog: catalog
-            )
-            let payload = makeScanPayload(catalog)
-            applyScanPayload(payload, preservingImportedDownloads: true)
-            let removed = audit.items.filter { $0.outcome == .confirmedRemoved }.count
-            let unresolved = audit.items.count - removed
-            status = "Delete verified: \(removed) removed, \(unresolved) still present or unresolved."
-            persistOperationResult(makeDeleteRecord(audit: audit))
-        } catch {
-            let audit = DeleteReconciler.unverified(
-                snapshot: snapshot,
-                reason: error.localizedDescription,
-                frameworkSummary: summary
-            )
-            persistOperationResult(makeDeleteRecord(audit: audit))
-            status = "Delete finished, but verification is pending. Open Results to retry verification."
-            operationState.finish()
+    ) -> Bool {
+        guard summary.successful.isEmpty, summary.canceled.isEmpty else { return false }
+        guard summary.failed.count == snapshot.items.count, !summary.failed.isEmpty else {
+            return false
         }
+        return summary.failed.allSatisfy { Self.preSubmissionFailureReasons.contains($0.reason) }
+    }
+
+    /// Starts post-delete verification. Test seam for the phase and its cancellation.
+    func startDeleteVerificationForTesting(
+        snapshot: DeletePlanSnapshot,
+        summary: DeviceGatewayDeleteSummary,
+        observedRemovedHandles: Set<UInt32> = []
+    ) {
+        if !operationState.isBusy {
+            operationState.begin(.deleting)
+        }
+        if operationProgress == nil {
+            operationProgress = MediaOperationProgress(kind: .deleting, totalItems: snapshot.items.count)
+        }
+        if operationCancellation == nil {
+            operationCancellation = DeviceOperationCancellation()
+        }
+        beginVerification(
+            snapshot: snapshot,
+            summary: summary,
+            observedRemovedHandles: observedRemovedHandles,
+            isUserRequested: true
+        )
+    }
+
+    /// Confirms a delete from the framework's own removal callbacks, skipping the rescan.
+    ///
+    /// A full catalog rescan of ~4,000 files is what made deleting one photo feel far slower
+    /// than the Phase 6 flow. Phase 6 was faster only because it trusted the delete
+    /// completion callback, which a device test proved unreliable: it reported success for
+    /// `IMG_3879.HEIC` while that file was still on the phone. `cameraDevice(_:didRemove:)`
+    /// is different — it is the device reporting what it actually dropped — so it is real
+    /// evidence, and every item must be covered by it before the rescan can be skipped.
+    private func confirmedAuditFromRemovalEvidence(
+        snapshot: DeletePlanSnapshot,
+        summary: DeviceGatewayDeleteSummary,
+        observedRemovedHandles: Set<UInt32>
+    ) -> DeleteAudit? {
+        guard !snapshot.items.isEmpty else { return nil }
+        let successful = Set(summary.successful)
+        guard snapshot.items.allSatisfy({
+            successful.contains($0.token) && observedRemovedHandles.contains($0.token.objectHandle)
+        }) else {
+            return nil
+        }
+        return DeleteAudit(
+            snapshot: snapshot,
+            verificationState: .verified,
+            verifiedAt: Date(),
+            verificationReason: "Confirmed by the device's own removal notification.",
+            frameworkSummary: summary,
+            items: snapshot.items.map { planned in
+                DeleteAudit.Item(
+                    token: planned.token,
+                    filename: planned.filename,
+                    kind: planned.kind,
+                    size: planned.size,
+                    outcome: .confirmedRemoved,
+                    reason: nil
+                )
+            }
+        )
+    }
+
+    /// Runs verification in an owned, cancelable task.
+    private func beginVerification(
+        snapshot: DeletePlanSnapshot,
+        summary: DeviceGatewayDeleteSummary,
+        observedRemovedHandles: Set<UInt32> = [],
+        // Retry Verification is a deliberate user action, so it always scans even though
+        // the automatic post-delete rescan is disabled.
+        isUserRequested: Bool = false
+    ) {
+        // Nothing reached the device: finish now rather than making the user sit through a
+        // misleading destructive-looking phase for an answer already known.
+        if wasNeverSubmitted(snapshot: snapshot, summary: summary) {
+            let reason = summary.failed.first?.reason
+                ?? DeviceGatewayError.noDevice.localizedDescription
+            finishVerification(
+                audit: DeleteReconciler.unverified(
+                    snapshot: snapshot,
+                    reason: reason,
+                    frameworkSummary: summary
+                ),
+                status: "Delete was not submitted: \(reason) Nothing was removed."
+            )
+            return
+        }
+
+        // The device already told us these objects are gone, so confirm immediately instead
+        // of rescanning the whole catalog.
+        if let audit = confirmedAuditFromRemovalEvidence(
+            snapshot: snapshot,
+            summary: summary,
+            observedRemovedHandles: observedRemovedHandles
+        ) {
+            applySuccessfulDeletion(itemIDs: Set(
+                allItems
+                    .filter { item in snapshot.items.contains { $0.token == item.token } }
+                    .map(\.id)
+            ))
+            finishVerification(
+                audit: audit,
+                status: "Delete verified: \(audit.items.count) removed."
+            )
+            return
+        }
+
+        // Automatic verification is disabled: the rescan does not complete on a live gateway
+        // and turned a one-file delete into a multi-minute wait. The framework's own result
+        // is recorded, but it is never treated as proof — rows stay until a catalog confirms
+        // removal, and Results offers Retry Verification for a deliberate check.
+        if !Self.verifiesDeletesAutomatically, !isUserRequested {
+            let removed = summary.successful.count
+            let failed = summary.failed.count
+            finishVerification(
+                audit: DeleteReconciler.unverified(
+                    snapshot: snapshot,
+                    reason: "Submitted to the device; not verified against a fresh catalog.",
+                    frameworkSummary: summary
+                ),
+                status: failed == 0
+                    ? "Deleted \(removed) item(s). Scan to refresh the device catalog."
+                    : "Delete submitted: \(removed) reported removed, \(failed) failed. Scan to refresh the device catalog."
+            )
+            // Hide the rows the device reported as deleted, so the list matches what the
+            // user just did. This is presentation only: the audit still records the delete
+            // as unverified, and a later scan is the sole authority — if any item is in fact
+            // still on the device, the next scan brings its row back.
+            let removedTokens = Set(summary.successful)
+            applySuccessfulDeletion(itemIDs: Set(
+                allItems.filter { removedTokens.contains($0.token) }.map(\.id)
+            ))
+            return
+        }
+
+        if var progress = operationProgress {
+            progress.beginVerification()
+            operationProgress = progress
+            status = progress.detail
+        }
+
+        verificationTask?.cancel()
+        let verificationID = UUID()
+        activeVerificationID = verificationID
+        verificationTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            do {
+                let catalog = try await self.verificationScan(Self.verificationTimeout)
+                // A cancel that landed while the scan was in flight wins: a catalog fetched
+                // after the user asked to stop must not silently remove rows.
+                try Task.checkCancellation()
+                guard self.activeVerificationID == verificationID else { return }
+                let audit = DeleteReconciler.reconcile(
+                    snapshot: snapshot,
+                    summary: summary,
+                    catalog: catalog,
+                    // Copies the duplicate plan deliberately keeps. A survivor with one of
+                    // these fingerprints is deduplication working, not a failed delete.
+                    keptFingerprints: self.keptDuplicateFingerprints()
+                )
+                self.applyScanPayload(self.makeScanPayload(catalog), preservingImportedDownloads: true)
+                let removed = audit.items.filter { $0.outcome == .confirmedRemoved }.count
+                let unresolved = audit.items.count - removed
+                self.finishVerification(
+                    audit: audit,
+                    status: "Delete verified: \(removed) removed, \(unresolved) still present or unresolved."
+                )
+            } catch is CancellationError {
+                guard self.activeVerificationID == verificationID else { return }
+                self.finishCanceledVerification(snapshot: snapshot, summary: summary)
+            } catch {
+                guard self.activeVerificationID == verificationID else { return }
+                self.finishVerification(
+                    audit: DeleteReconciler.unverified(
+                        snapshot: snapshot,
+                        reason: error.localizedDescription,
+                        frameworkSummary: summary
+                    ),
+                    status: "Delete finished, but verification is pending. Open Results to retry verification."
+                )
+            }
+        }
+    }
+
+    /// Settles a canceled verification. The requested items keep their rows and are recorded
+    /// as verification-pending: a canceled operation may never claim a removal.
+    private func finishCanceledVerification(
+        snapshot: DeletePlanSnapshot,
+        summary: DeviceGatewayDeleteSummary
+    ) {
+        finishVerification(
+            audit: DeleteReconciler.unverified(
+                snapshot: snapshot,
+                reason: "Verification was canceled before the device catalog could confirm the result.",
+                frameworkSummary: summary
+            ),
+            status: "Verification canceled. Rescanning to show what was actually removed."
+        )
+        // A canceled delete usually removed *some* of the batch. Without this the rows for
+        // files that are already gone stayed on screen until the user pressed Scan.
+        refreshAfterCancellation()
+    }
+
+    private func finishVerification(audit: DeleteAudit, status: String) {
+        // Claims the settlement, so a late arrival from the same operation is ignored.
+        activeVerificationID = nil
+        verificationTask = nil
+        persistOperationResult(makeDeleteRecord(audit: audit))
+        self.status = status
         operationProgress = nil
         operationCancellation = nil
+        operationState.finish()
+    }
+
+    /// Rescans after a canceled operation so the catalog matches what actually happened.
+    ///
+    /// A cancel lands mid-batch: some files are already deleted, or already downloaded, and
+    /// the rest are not. The app cannot know which without asking the device, so before
+    /// this existed the user was left with rows for files that were gone and green ticks on
+    /// files that never arrived, until they pressed Scan themselves. Reported on
+    /// 2026-08-15 for both Delete Cancel and Download Cancel.
+    ///
+    /// A scan is the same read the user would have triggered by hand, and it is cheap
+    /// (~1 s in a fresh helper). It is deliberately *not* run when the operation was never
+    /// submitted, since nothing can have changed.
+    private func refreshAfterCancellation() {
+        guard !operationState.isBusy else { return }
+        scan()
+    }
+
+    /// Fingerprints of the copies the duplicate plan keeps.
+    ///
+    /// Deleting from Duplicates removes the redundant copy and leaves this one, so a file
+    /// matching one of these surviving after a delete is the intended outcome.
+    private func keptDuplicateFingerprints() -> Set<DeviceFileFingerprint> {
+        let keptIDs = Set(duplicatePlan.keep.map(\.id))
+        return Set(allItems.filter { keptIDs.contains($0.id) }.map(\.token.fingerprint))
     }
 
     private func makeScanPayload(_ snapshot: DeviceCatalogSnapshot) -> ScanPayload {
@@ -1123,7 +1669,7 @@ final class MediaBrowserViewModel: ObservableObject {
             deviceName: snapshot.deviceName,
             deviceIdentityHash: snapshot.deviceIdentityHash,
             items: items,
-            plan: DuplicatePlanner.plan(files: items.map(\.model), rule: .nameKindSize)
+            plan: DuplicatePlanner.plan(files: items.map(\.model), definition: duplicateRule.definition)
         )
     }
 
@@ -1175,13 +1721,58 @@ final class MediaBrowserViewModel: ObservableObject {
         for itemID in itemIDs {
             importedFileURLsByItemID.removeValue(forKey: itemID)
         }
-        duplicatePlan = DuplicatePlanner.plan(files: allItems.map(\.model), rule: .nameKindSize)
+        duplicatePlan = DuplicatePlanner.plan(
+            files: allItems.map(\.model),
+            definition: duplicateRule.definition
+        )
+        duplicateGroups = DuplicateGrouping.groups(
+            files: allItems.map(\.model),
+            definition: duplicateRule.definition
+        )
         refreshVisibleOrder()
     }
 
     func recordSuccessfulDownload(itemID: String, fileURL: URL) {
         importedFileURLsByItemID[itemID] = fileURL.standardizedFileURL
         importedItemIDs.insert(itemID)
+    }
+
+    /// Rebuilds the badges from scratch against the current destination.
+    ///
+    /// Used when the destination changes: a badge earned in the old folder says nothing
+    /// about the new one, so the previous set is discarded rather than carried over.
+    func refreshImportedBadgesForDestination() {
+        importedItemIDs.removeAll()
+        importedFileURLsByItemID.removeAll()
+        adoptDownloadsAlreadyInDestination(items: allItems)
+    }
+
+    /// Badges every catalog item whose filename is already present in the destination.
+    ///
+    /// Carrying the previous session's badges forward is not enough on its own: on a fresh
+    /// launch, or for anything downloaded in an earlier run, nothing was carried and the
+    /// item showed no tick even though the file was sitting in the destination. Pressing
+    /// Download then answered "Import blocked", because the preflight could see the file
+    /// the badge was hiding.
+    ///
+    /// So the badge is derived from the destination itself, using the preflight's own
+    /// normalization, which is what keeps the two from ever disagreeing again. This reads
+    /// one directory listing per scan.
+    private func adoptDownloadsAlreadyInDestination(items: [MediaItem]) {
+        let destination = importDestination
+        let existing = ImportDestinationPreflight.existingNormalizedFilenames(in: destination)
+        guard !existing.isEmpty else { return }
+
+        for item in items where !importedItemIDs.contains(item.id) {
+            let normalized = ImportDestinationPreflight.normalizedFilename(item.model.name)
+            guard existing.contains(normalized) else { continue }
+            // Recorded against the real path so the badge retires by the same rule as any
+            // other: it disappears when the file does.
+            importedItemIDs.insert(item.id)
+            importedFileURLsByItemID[item.id] = destination
+                .appendingPathComponent(item.model.name)
+                .standardizedFileURL
+        }
     }
 
     /// Reconciles the session badge with the local copy after the user returns from Finder.
@@ -1238,7 +1829,7 @@ final class MediaBrowserViewModel: ObservableObject {
         do {
             operationHistory = try operationResultStore.append(record)
             operationHistoryWarning = nil
-            if record.hasIssues {
+            if record.deservesAttention {
                 isShowingOperationHistory = true
             }
         } catch {

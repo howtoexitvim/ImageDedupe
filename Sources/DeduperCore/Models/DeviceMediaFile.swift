@@ -45,4 +45,27 @@ public struct DeviceMediaFile: Equatable, Codable, Sendable {
         self.isHighFramerate = isHighFramerate
         self.isTimeLapse = isTimeLapse
     }
+
+    /// The same file under a different identity.
+    ///
+    /// Used only by catalog construction, which is the one place that can see the whole
+    /// catalog and so the only place that can guarantee ids are unique.
+    public func withID(_ newID: String) -> DeviceMediaFile {
+        DeviceMediaFile(
+            id: newID,
+            name: name,
+            kind: kind,
+            size: size,
+            timestamp: timestamp,
+            width: width,
+            height: height,
+            duration: duration,
+            location: location,
+            groupUUID: groupUUID,
+            burstUUID: burstUUID,
+            isRaw: isRaw,
+            isHighFramerate: isHighFramerate,
+            isTimeLapse: isTimeLapse
+        )
+    }
 }

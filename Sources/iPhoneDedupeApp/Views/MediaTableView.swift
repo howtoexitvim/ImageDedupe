@@ -106,6 +106,21 @@ struct MediaTableView: NSViewRepresentable {
         weak var tableView: NSTableView?
 
         private var items: [MediaBrowserViewModel.MediaItem] = []
+
+        /// The displayed rows. In All Media this is one `.item` per media item, so indices
+        /// are unchanged; in Duplicates it interleaves `.header` rows between groups.
+        ///
+        /// Every index-based behaviour in the List is expressed against these rows, so the
+        /// mapping lives in one place rather than being recomputed at each call site.
+        private var rows: [MediaListRow] = []
+
+        /// The media item a row shows, or `nil` for a header row.
+        private func item(atRow row: Int) -> MediaBrowserViewModel.MediaItem? {
+            guard rows.indices.contains(row), let id = rows[row].itemID else { return nil }
+            return itemsByID[id]
+        }
+
+        private var itemsByID: [String: MediaBrowserViewModel.MediaItem] = [:]
         private var lastRenderKey: RenderKey?
 
         /// The inputs that actually change what a row draws. Comparing this avoids a full
@@ -195,6 +210,30 @@ struct MediaTableView: NSViewRepresentable {
             let heightChanged = lastRenderKey?.thumbnailSide != key.thumbnailSide
             lastRenderKey = key
             self.items = items
+            // Headers only in Duplicates; All Media keeps a plain one-row-per-item list.
+            if viewModel.reviewScope == .duplicates, !viewModel.duplicateGroups.isEmpty {
+                // The visible set is what survives the search; a group with nothing left
+                // drops its header too, rather than heading an empty space.
+                self.rows = MediaListRow.rows(
+                    forGroups: viewModel.duplicateGroups,
+                    visibleItemIDs: Set(items.map(\.id))
+                )
+            } else {
+                self.rows = items.map { .item($0.id) }
+            }
+            self.itemsByID = Dictionary(uniqueKeysWithValues: items.map { ($0.id, $0) })
+            // Clicks, arrow keys, and scroll-to-row all work in table rows, which differ
+            // from item indices once group headers are interleaved.
+            controller.rowMapping = MediaTableController.RowMapping(
+                idAtRow: { [weak self] row in
+                    guard let self, self.rows.indices.contains(row) else { return nil }
+                    return self.rows[row].itemID
+                },
+                rowForID: { [weak self] id in
+                    guard let self else { return nil }
+                    return MediaListRow.rowIndex(ofItemID: id, in: self.rows)
+                }
+            )
 
             guard let tableView else { return }
             updateSortIndicator(on: tableView)
@@ -202,10 +241,10 @@ struct MediaTableView: NSViewRepresentable {
                 tableView.reloadData()
             } else {
                 let columns = IndexSet(integersIn: 0..<tableView.numberOfColumns)
-                tableView.reloadData(forRowIndexes: IndexSet(integersIn: 0..<items.count), columnIndexes: columns)
+                tableView.reloadData(forRowIndexes: IndexSet(integersIn: 0..<rows.count), columnIndexes: columns)
             }
             if heightChanged {
-                tableView.noteHeightOfRows(withIndexesChanged: IndexSet(integersIn: 0..<items.count))
+                tableView.noteHeightOfRows(withIndexesChanged: IndexSet(integersIn: 0..<rows.count))
             }
         }
 
@@ -228,8 +267,10 @@ struct MediaTableView: NSViewRepresentable {
         /// Builds the row context menu. Delete only *requests* confirmation; it never
         /// invokes the device delete directly.
         func contextMenu(forRow row: Int) -> NSMenu? {
-            guard items.indices.contains(row) else { return nil }
-            let item = items[row]
+            // Via the row mapping, not `items[row]`: with group headers interleaved the two
+            // differ, and Delete lives in this menu, so acting on the wrong file would be
+            // unrecoverable. A header itself has no menu.
+            guard let item = item(atRow: row) else { return nil }
             viewModel.prepareContextActionSelection(for: item)
 
             let menu = NSMenu()
@@ -278,7 +319,8 @@ struct MediaTableView: NSViewRepresentable {
             guard let tableView,
                   let clipView = scrollView?.contentView,
                   let focusedID = viewModel.selectedItemID,
-                  let row = controller.row(for: focusedID),
+                  let row = MediaListRow.scrollTargetRow(forItemID: focusedID, in: rows)
+                    ?? controller.row(for: focusedID),
                   row >= 0, row < tableView.numberOfRows else { return }
 
             let rowRect = tableView.rect(ofRow: row)
@@ -304,9 +346,9 @@ struct MediaTableView: NSViewRepresentable {
             let actionSelected = viewModel.selectedActionIDs
 
             for row in visibleRowRange(in: tableView) {
-                guard items.indices.contains(row),
+                guard let item = item(atRow: row),
                       let rowView = tableView.rowView(atRow: row, makeIfNecessary: false) as? MediaTableRowView else { continue }
-                let id = items[row].id
+                let id = item.id
                 rowView.isFocusedItem = focusedID == id
                 rowView.isActionSelected = actionSelected.contains(id)
                 rowView.isBrowserFocused = isBrowserFocused
@@ -334,20 +376,32 @@ struct MediaTableView: NSViewRepresentable {
         // MARK: - NSTableViewDataSource
 
         func numberOfRows(in tableView: NSTableView) -> Int {
-            items.count
+            rows.count
         }
 
         func tableView(_ tableView: NSTableView, heightOfRow row: Int) -> CGFloat {
-            MediaTableMetrics.rowHeight(thumbnailSide: viewModel.displayScale.listThumbnailSide)
+            guard rows.indices.contains(row), rows[row].isHeader else {
+                return MediaTableMetrics.rowHeight(thumbnailSide: viewModel.displayScale.listThumbnailSide)
+            }
+            return MediaTableMetrics.groupHeaderHeight
+        }
+
+        /// Tells AppKit a header is a group row, which gives it the platform's own styling
+        /// and, with `selectionShouldChange` already false, keeps it unselectable.
+        func tableView(_ tableView: NSTableView, isGroupRow row: Int) -> Bool {
+            rows.indices.contains(row) && rows[row].isHeader
         }
 
         // MARK: - NSTableViewDelegate
 
         func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int) -> NSView? {
+            // A group row spans the table rather than filling columns.
+            if rows.indices.contains(row), case let .header(title, groupID) = rows[row] {
+                return groupHeaderCell(title: title, groupID: groupID, tableView: tableView)
+            }
             guard let tableColumn,
                   let column = MediaTableColumn.column(for: tableColumn.identifier),
-                  items.indices.contains(row) else { return nil }
-            let item = items[row]
+                  let item = item(atRow: row) else { return nil }
             viewModel.loadVisibleDetails(for: item)
 
             switch column {
@@ -362,8 +416,7 @@ struct MediaTableView: NSViewRepresentable {
 
         func tableView(_ tableView: NSTableView, rowViewForRow row: Int) -> NSTableRowView? {
             let rowView = MediaTableRowView()
-            if items.indices.contains(row) {
-                let item = items[row]
+            if let item = item(atRow: row) {
                 rowView.isActionSelected = viewModel.selectedActionIDs.contains(item.id)
                 rowView.isFocusedItem = viewModel.selectedItemID == item.id
                 rowView.isBrowserFocused = viewModel.selection.focusOwner == .mediaBrowser
@@ -434,6 +487,27 @@ struct MediaTableView: NSViewRepresentable {
                 side: CGFloat(viewModel.displayScale.listThumbnailSide),
                 isImported: viewModel.importedItemIDs.contains(item.id),
                 isDuplicateCandidate: viewModel.duplicateDeleteIDs.contains(item.id)
+            )
+            return cell
+        }
+
+        /// The header above each duplicate group, naming the file and how many copies of it
+        /// the current rule found.
+        private func groupHeaderCell(
+            title: String,
+            groupID: String,
+            tableView: NSTableView
+        ) -> NSView {
+            let identifier = NSUserInterfaceItemIdentifier("MediaGroupHeaderCell")
+            let cell = tableView.makeView(withIdentifier: identifier, owner: self) as? MediaGroupHeaderCellView
+                ?? MediaGroupHeaderCellView(identifier: identifier)
+            cell.configure(
+                title: title,
+                isChecked: viewModel.isGroupFullySelected(groupID: groupID),
+                onToggle: { [weak self] in
+                    self?.viewModel.toggleGroupSelection(groupID: groupID)
+                    self?.refreshFocusDecoration()
+                }
             )
             return cell
         }

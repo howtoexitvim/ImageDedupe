@@ -165,7 +165,27 @@ struct ImportDestinationPreflight {
         }
     }
 
-    private static func normalizedFilename(_ filename: String) -> String {
+    /// The filenames already present in `destination`, normalized the same way the
+    /// collision check normalizes them.
+    ///
+    /// Exposed so the "already downloaded" badge can be derived from the destination
+    /// itself, using this exact rule. When the badge decided independently, the two
+    /// disagreed: a file downloaded in an earlier session showed no tick, and pressing
+    /// Download then answered "Import blocked" because this check could see it.
+    /// Returns an empty set when the destination cannot be read, so an unreadable folder
+    /// simply shows no badges rather than blocking anything.
+    static func existingNormalizedFilenames(
+        in destination: URL,
+        fileManager: FileManager = .default
+    ) -> Set<String> {
+        guard let filenames = try? fileManager.contentsOfDirectory(atPath: destination.path) else {
+            return []
+        }
+        return Set(filenames.map(normalizedFilename))
+    }
+
+    /// Whether a file of this name would collide with something already in `destination`.
+    static func normalizedFilename(_ filename: String) -> String {
         filename.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current)
     }
 

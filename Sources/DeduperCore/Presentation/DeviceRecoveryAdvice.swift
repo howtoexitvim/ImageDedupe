@@ -92,7 +92,11 @@ public struct DeviceRecoveryAdvice: Equatable, Sendable {
         let text = message.lowercased()
 
         let kind: Kind
-        if text.contains("locked") || text.contains("access restricted") || text.contains("access-restricted") {
+        // "unlock" matters as much as "locked": ImageCaptureCore's own wording is
+        // "Please unlock “<device>”", which fell through to `.unknown` and so gave the user
+        // no guidance at all when they scanned with the phone locked.
+        if text.contains("locked") || text.contains("unlock")
+            || text.contains("access restricted") || text.contains("access-restricted") {
             kind = .deviceLocked
         } else if text.contains("no imagecapturecore camera") || text.contains("no device") {
             kind = .noDevice
