@@ -768,7 +768,8 @@ final class MediaBrowserViewModel: ObservableObject {
             self.operationProgress = nil
             self.operationCancellation = nil
             self.operationState.finish()
-            self.status = "Canceled without device acknowledgement. The result is unconfirmed — open Results to retry verification."
+            self.status = "Canceled without device acknowledgement. Rescanning to show the device's actual state."
+            self.refreshAfterCancellation()
         }
     }
 
@@ -1020,9 +1021,18 @@ final class MediaBrowserViewModel: ObservableObject {
         inspectorPreviewTotalCost = 0
     }
 
+    /// - Parameter preservingImportedDownloads: carries the "already downloaded" badges
+    ///   across the new catalog, matching by fingerprint rather than by item id.
+    ///
+    ///   This defaulted to `false`, so a user-pressed Scan cleared every badge even though
+    ///   the files were still sitting in the destination. The user then pressed Download
+    ///   again and was told "Import blocked", because the preflight could see what the
+    ///   badge no longer showed. The badge is only a view of what is on disk, and
+    ///   `reconcileImportedDownloads` already drops any whose file has gone, so carrying it
+    ///   across a scan is both safe and what the user expects.
     private func applyScanPayload(
         _ payload: ScanPayload,
-        preservingImportedDownloads: Bool = false
+        preservingImportedDownloads: Bool = true
     ) {
         var importedURLsByFingerprint: [DeviceFileFingerprint: URL] = [:]
         if preservingImportedDownloads {
@@ -1175,10 +1185,13 @@ final class MediaBrowserViewModel: ObservableObject {
             guard let itemID = requestedIDsByToken[successfulDownload.token] else {
                 continue
             }
-            recordSuccessfulDownload(
-                itemID: itemID,
-                fileURL: destination.appendingPathComponent(successfulDownload.filename)
-            )
+            let fileURL = destination.appendingPathComponent(successfulDownload.filename)
+            // The badge claims a file is on disk, so confirm it is rather than trusting the
+            // summary. A canceled batch settles while a commit is still in flight, and
+            // items reported successful could end up never reaching the destination — which
+            // showed as a green tick on a file that was not there, reported 2026-08-15.
+            guard isExistingRegularFile(fileURL) else { continue }
+            recordSuccessfulDownload(itemID: itemID, fileURL: fileURL)
         }
         status = "Imported \(summary.successful.count) item(s), \(summary.failed.count) failed, \(summary.canceled.count) canceled."
         persistOperationResult(OperationResultRecord(
@@ -1199,6 +1212,11 @@ final class MediaBrowserViewModel: ObservableObject {
         operationProgress = nil
         operationCancellation = nil
         operationState.finish()
+        // A canceled import leaves the catalog and the badges only partly updated, so take
+        // a fresh look rather than leaving the user to press Scan to find out what landed.
+        if !summary.canceled.isEmpty {
+            refreshAfterCancellation()
+        }
     }
 
     /// How long a verification rescan may run before it is abandoned as pending.
@@ -1460,8 +1478,11 @@ final class MediaBrowserViewModel: ObservableObject {
                 reason: "Verification was canceled before the device catalog could confirm the result.",
                 frameworkSummary: summary
             ),
-            status: "Verification canceled. The result is unconfirmed — open Results to retry verification."
+            status: "Verification canceled. Rescanning to show what was actually removed."
         )
+        // A canceled delete usually removed *some* of the batch. Without this the rows for
+        // files that are already gone stayed on screen until the user pressed Scan.
+        refreshAfterCancellation()
     }
 
     private func finishVerification(audit: DeleteAudit, status: String) {
@@ -1473,6 +1494,22 @@ final class MediaBrowserViewModel: ObservableObject {
         operationProgress = nil
         operationCancellation = nil
         operationState.finish()
+    }
+
+    /// Rescans after a canceled operation so the catalog matches what actually happened.
+    ///
+    /// A cancel lands mid-batch: some files are already deleted, or already downloaded, and
+    /// the rest are not. The app cannot know which without asking the device, so before
+    /// this existed the user was left with rows for files that were gone and green ticks on
+    /// files that never arrived, until they pressed Scan themselves. Reported on
+    /// 2026-08-15 for both Delete Cancel and Download Cancel.
+    ///
+    /// A scan is the same read the user would have triggered by hand, and it is cheap
+    /// (~1 s in a fresh helper). It is deliberately *not* run when the operation was never
+    /// submitted, since nothing can have changed.
+    private func refreshAfterCancellation() {
+        guard !operationState.isBusy else { return }
+        scan()
     }
 
     /// Fingerprints of the copies the duplicate plan keeps.
