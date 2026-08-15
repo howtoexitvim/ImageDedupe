@@ -1,10 +1,10 @@
 import Testing
 @testable import DeduperCore
 
-@Test func smartSearchMatchesPlainTextAcrossBasicFields() {
+@Test func smartSearchMatchesUnprefixedTextAgainstNameOnly() {
     let file = DeviceMediaFile(
         id: "1",
-        name: "IMG_1128.HEIC",
+        name: "IMG_1128.asset",
         kind: "HEIC",
         size: 1_100_000,
         timestamp: "2026-05-04T13:05:54.000Z",
@@ -14,8 +14,9 @@ import Testing
     )
 
     #expect(MediaSearchQuery("1128").matches(file))
-    #expect(MediaSearchQuery("heic").matches(file))
-    #expect(MediaSearchQuery("113°").matches(file))
+    #expect(!MediaSearchQuery("heic").matches(file))
+    #expect(!MediaSearchQuery("113°").matches(file))
+    #expect(MediaSearchQuery("kind:heic").matches(file))
     #expect(!MediaSearchQuery("mov").matches(file))
 }
 
