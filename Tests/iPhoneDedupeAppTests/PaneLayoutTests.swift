@@ -34,7 +34,33 @@ final class PaneLayoutTests: XCTestCase {
         XCTAssertEqual(MediaPane.inspector.defaultWidth, 300)
 
         XCTAssertEqual(MediaPaneLayout.minimumCenterWidth, 480)
-        XCTAssertEqual(MediaPaneLayout.minimumWindowWidth, 940)
+        XCTAssertEqual(MediaPaneLayout.minimumWindowWidth, 920)
+    }
+
+    /// Regression: the window minimum was a hard-coded 940 pt that had drifted out of
+    /// agreement with the pane minimums. At 940 with default panes the center got only
+    /// 420 pt — below its own 480 pt minimum — so the table's leading checkbox, thumbnail,
+    /// and name columns were clipped with no way to scroll back to them.
+    func testWindowMinimumIsDerivedFromPaneMinimums() {
+        XCTAssertEqual(
+            MediaPaneLayout.minimumWindowWidth,
+            MediaPane.sidebar.minimumWidth
+                + MediaPaneLayout.minimumCenterWidth
+                + MediaPane.inspector.minimumWidth
+        )
+    }
+
+    /// The center pane must never be handed less than its declared minimum once the window
+    /// itself respects that minimum.
+    func testCenterKeepsItsMinimumAtTheSmallestWindow() {
+        let center = MediaPaneLayout.centerWidth(
+            windowWidth: MediaPaneLayout.minimumWindowWidth,
+            sidebarWidth: MediaPane.sidebar.minimumWidth,
+            inspectorWidth: MediaPane.inspector.minimumWidth,
+            isSidebarCollapsed: false,
+            isInspectorCollapsed: false
+        )
+        XCTAssertGreaterThanOrEqual(center, MediaPaneLayout.minimumCenterWidth)
     }
 
     /// The declared minimums must actually fit inside the declared minimum window, or the
@@ -46,27 +72,19 @@ final class PaneLayoutTests: XCTestCase {
         XCTAssertLessThanOrEqual(required, MediaPaneLayout.minimumWindowWidth)
     }
 
-    /// The ideal widths (220 + 480 + 300 = 1000) deliberately exceed the 940 pt minimum
-    /// window. At that width the center pane gives up room down toward its own minimum
-    /// rather than the sidebars being squeezed, so this documents which pane yields.
-    func testIdealPanesExceedTheMinimumWindowSoCenterAbsorbsTheDifference() {
+    /// The ideal widths (220 + 480 + 300 = 1000) exceed the minimum window, which is fine:
+    /// at small widths the sidebars shrink toward their own minimums rather than the center
+    /// being squeezed below 480. This documents which pane yields.
+    func testIdealPanesExceedTheMinimumWindowSoSidebarsYieldFirst() {
         let idealTotal = MediaPane.sidebar.defaultWidth
             + MediaPaneLayout.minimumCenterWidth
             + MediaPane.inspector.defaultWidth
         XCTAssertGreaterThan(idealTotal, MediaPaneLayout.minimumWindowWidth)
 
-        // At the minimum window with both sidebars at their ideal widths, the center still
-        // has usable room, even though it is below its preferred minimum.
-        let centerAtMinimumWindow = MediaPaneLayout.minimumWindowWidth
-            - MediaPane.sidebar.defaultWidth
-            - MediaPane.inspector.defaultWidth
-        XCTAssertGreaterThan(centerAtMinimumWindow, 0)
-
-        // And the declared minimums do fit, which is what the split view must guarantee.
-        let minimumTotal = MediaPane.sidebar.minimumWidth
-            + MediaPaneLayout.minimumCenterWidth
-            + MediaPane.inspector.minimumWidth
-        XCTAssertLessThanOrEqual(minimumTotal, MediaPaneLayout.minimumWindowWidth)
+        // Shrinking both sidebars to their minimums is exactly enough for a full center.
+        let recovered = (MediaPane.sidebar.defaultWidth - MediaPane.sidebar.minimumWidth)
+            + (MediaPane.inspector.defaultWidth - MediaPane.inspector.minimumWidth)
+        XCTAssertGreaterThanOrEqual(idealTotal - recovered, MediaPaneLayout.minimumWindowWidth)
     }
 
     func testCenterWidthForWindowRespectsPaneWidths() {

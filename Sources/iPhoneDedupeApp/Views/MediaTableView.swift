@@ -31,7 +31,14 @@ struct MediaTableView: NSViewRepresentable {
         tableView.style = .plain
         tableView.rowSizeStyle = .custom
         tableView.headerView = NSTableHeaderView()
-        tableView.columnAutoresizingStyle = .lastColumnOnlyAutoresizingStyle
+        // `.noColumnAutoresizing` rather than `.lastColumnOnlyAutoresizingStyle`.
+        //
+        // With last-column autoresizing, AppKit shrinks columns to fit the viewport instead
+        // of letting the table overflow. In a narrow center pane that compressed the
+        // leading checkbox/thumbnail/name columns out of view with nothing to scroll to,
+        // because the document never became wider than the clip view. Keeping the columns
+        // at their own widths is what makes the horizontal scroller real.
+        tableView.columnAutoresizingStyle = .noColumnAutoresizing
         tableView.intercellSpacing = NSSize(width: 8, height: 0)
         // Native header drag reordering. The checkbox and thumbnail columns opt out below.
         tableView.allowsColumnReordering = true
@@ -44,7 +51,9 @@ struct MediaTableView: NSViewRepresentable {
             tableColumn.width = preferences.width(for: column)
             tableColumn.minWidth = column.minimumWidth
             tableColumn.maxWidth = column.maximumWidth
-            tableColumn.resizingMask = column.isFlexible ? [.autoresizingMask, .userResizingMask] : .userResizingMask
+            // User resizing only. Autoresizing would let AppKit shrink a column below the
+            // width the user chose in order to fit a narrow viewport.
+            tableColumn.resizingMask = .userResizingMask
             tableView.addTableColumn(tableColumn)
         }
 

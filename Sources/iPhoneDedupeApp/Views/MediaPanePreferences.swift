@@ -34,7 +34,17 @@ enum MediaPane: String, CaseIterable {
 
 enum MediaPaneLayout {
     static let minimumCenterWidth: CGFloat = 480
-    static let minimumWindowWidth: CGFloat = 940
+    static let minimumWindowHeight: CGFloat = 600
+
+    /// The window cannot be narrower than every pane's minimum, or the split view is asked
+    /// to satisfy constraints that do not fit and the center browser gets squeezed until
+    /// its leading columns clip.
+    ///
+    /// This is derived rather than hard-coded: the previous 940 pt literal drifted out of
+    /// agreement with the pane minimums it was supposed to accommodate.
+    static var minimumWindowWidth: CGFloat {
+        MediaPane.sidebar.minimumWidth + minimumCenterWidth + MediaPane.inspector.minimumWidth
+    }
 
     /// Room left for the center browser.
     ///
