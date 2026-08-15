@@ -253,12 +253,27 @@ struct MediaBrowserView: View {
     /// The height is driven by the content's natural single-line height; `GeometryReader`
     /// only measures the available width so `MediaStatusBarLayout` can decide which labels
     /// survive. Nothing here is allowed to wrap.
+    /// The text each droppable status bar element renders, for width measurement.
+    private var statusBarLabels: MediaStatusBarLayout.Labels {
+        MediaStatusBarLayout.Labels(
+            duplicateCount: "Duplicate candidates \(viewModel.duplicatePlan.delete.count)",
+            shownCount: "\(viewModel.filteredItems.count) shown / \(viewModel.allItems.count) total",
+            selectedCount: "\(viewModel.selectedActionIDs.count) selected",
+            destinationTitle: viewModel.importDestination.lastPathComponent,
+            resultsTitle: "Results",
+            progressText: viewModel.operationProgress?.detail ?? ""
+        )
+    }
+
     private var statusBar: some View {
         GeometryReader { proxy in
             statusBarContent(
                 plan: MediaStatusBarLayout.plan(
                     availableWidth: proxy.size.width,
-                    hasProgress: viewModel.operationProgress != nil
+                    hasProgress: viewModel.operationProgress != nil,
+                    // The strings actually rendered, so the drop points are measured rather
+                    // than guessed from fixed constants.
+                    labels: statusBarLabels
                 )
             )
             // The height is clamped on the content, not just on the GeometryReader. The

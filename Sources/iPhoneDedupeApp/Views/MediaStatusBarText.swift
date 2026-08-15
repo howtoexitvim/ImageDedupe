@@ -69,20 +69,77 @@ enum MediaStatusBarLayout {
     /// means labels stay in place and get compressed, which is the failure being prevented.
     private static let controlsWidth: CGFloat = 380
 
-    /// Widths of the elements that may be dropped, in the order they are given up.
-    private static let duplicateCountWidth: CGFloat = 165
-    private static let shownCountWidth: CGFloat = 155
-    private static let selectedCountWidth: CGFloat = 95
-    private static let destinationTitleWidth: CGFloat = 95
-    private static let resultsTitleWidth: CGFloat = 65
+    /// The text each droppable element actually renders, so its width can be measured
+    /// rather than guessed.
+    struct Labels: Equatable {
+        var duplicateCount: String
+        var shownCount: String
+        var selectedCount: String
+        var destinationTitle: String
+        var resultsTitle: String
+        var progressText: String
+
+        init(
+            duplicateCount: String = "",
+            shownCount: String = "",
+            selectedCount: String = "",
+            destinationTitle: String = "",
+            resultsTitle: String = "",
+            progressText: String = ""
+        ) {
+            self.duplicateCount = duplicateCount
+            self.shownCount = shownCount
+            self.selectedCount = selectedCount
+            self.destinationTitle = destinationTitle
+            self.resultsTitle = resultsTitle
+            self.progressText = progressText
+        }
+    }
+
+    /// Padding around a measured label: the spacing between status bar elements, which the
+    /// string itself does not account for.
+    private static let labelPadding: CGFloat = 16
+
+    /// The rendered width of `text` in the status bar's font.
+    ///
+    /// Replaces hand-measured constants. Those were fixed numbers for text whose width
+    /// depends on the system font and on the actual values shown — "4,000 duplicates ·
+    /// 12.3 GB" is far wider than "2 duplicates · 900 KB" — so the drop points could fire
+    /// early or late. One text layout per element per resize is not a cost worth guessing
+    /// to avoid.
+    static func measuredWidth(of text: String) -> CGFloat {
+        guard !text.isEmpty else { return 0 }
+        let font = NSFont.systemFont(ofSize: NSFont.smallSystemFontSize)
+        let size = (text as NSString).size(withAttributes: [.font: font])
+        return size.width.rounded(.up) + labelPadding
+    }
+
+    /// The progress bar is a fixed-size control, not text, so it keeps a constant.
     private static let progressBarWidth: CGFloat = 104
-    private static let progressTextWidth: CGFloat = 140
 
     /// Extra width the Download/Delete words occupy beyond their icons.
     private static let actionTitlesWidth: CGFloat = 110
 
-    static func plan(availableWidth: CGFloat, hasProgress: Bool) -> Plan {
+    /// Chooses what the status bar can show in `availableWidth`.
+    ///
+    /// Elements are given up least-informative first: the counts are recoverable elsewhere
+    /// in the UI, whereas the current operation's text is the one thing the user is waiting
+    /// to read. Download and Delete keep their words longest, and collapse to icons rather
+    /// than truncating to an unreadable `D`.
+    static func plan(
+        availableWidth: CGFloat,
+        hasProgress: Bool,
+        labels: Labels = Labels()
+    ) -> Plan {
         var plan = Plan()
+
+        let duplicateCountWidth = measuredWidth(of: labels.duplicateCount)
+        let shownCountWidth = measuredWidth(of: labels.shownCount)
+        let selectedCountWidth = measuredWidth(of: labels.selectedCount)
+        let destinationTitleWidth = measuredWidth(of: labels.destinationTitle)
+        let resultsTitleWidth = measuredWidth(of: labels.resultsTitle)
+        let progressTextWidth = measuredWidth(of: labels.progressText)
+
         var required = controlsWidth
             + duplicateCountWidth
             + shownCountWidth
@@ -97,8 +154,6 @@ enum MediaStatusBarLayout {
             plan.showsProgressText = false
         }
 
-        // Least informative first. The counts are recoverable elsewhere in the UI, whereas
-        // the current operation's text is the one thing the user is waiting to read.
         func dropIfNeeded(_ width: CGFloat, _ drop: (inout Plan) -> Void) {
             guard required > availableWidth else { return }
             drop(&plan)
