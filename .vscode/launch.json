@@ -1,24 +1,45 @@
 {
+    "version": "0.2.0",
     "configurations": [
         {
             "type": "swift",
             "request": "launch",
             "args": [],
-            "cwd": "${workspaceFolder:iPhoneDedupeProject-2026-08-15-0024}",
-            "name": "Debug iphone-dedupe",
-            "target": "iphone-dedupe",
+            "cwd": "${workspaceFolder}",
+            "name": "Debug iPhoneDedupeVerifier",
+            "target": "iPhoneDedupeVerifier",
             "configuration": "debug",
-            "preLaunchTask": "swift: Build Debug iphone-dedupe"
+            "preLaunchTask": "swift: Build Debug iPhoneDedupeVerifier"
         },
         {
             "type": "swift",
             "request": "launch",
             "args": [],
-            "cwd": "${workspaceFolder:iPhoneDedupeProject-2026-08-15-0024}",
-            "name": "Release iphone-dedupe",
-            "target": "iphone-dedupe",
+            "cwd": "${workspaceFolder}",
+            "name": "Release iPhoneDedupeVerifier",
+            "target": "iPhoneDedupeVerifier",
             "configuration": "release",
-            "preLaunchTask": "swift: Build Release iphone-dedupe"
+            "preLaunchTask": "swift: Build Release iPhoneDedupeVerifier"
+        },
+        {
+            "type": "swift",
+            "request": "launch",
+            "args": [],
+            "cwd": "${workspaceFolder}",
+            "name": "Debug iPhoneDedupeApp (raw executable)",
+            "target": "iPhoneDedupeApp",
+            "configuration": "debug",
+            "preLaunchTask": "swift: Build Debug iPhoneDedupeApp"
+        },
+        {
+            "type": "swift",
+            "request": "launch",
+            "args": [],
+            "cwd": "${workspaceFolder}",
+            "name": "Release iPhoneDedupeApp (raw executable)",
+            "target": "iPhoneDedupeApp",
+            "configuration": "release",
+            "preLaunchTask": "swift: Build Release iPhoneDedupeApp"
         }
     ]
 }
