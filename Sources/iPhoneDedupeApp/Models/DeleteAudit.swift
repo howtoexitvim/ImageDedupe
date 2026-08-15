@@ -81,10 +81,15 @@ struct DeleteAudit: Codable, Equatable, Sendable {
 }
 
 enum DeleteReconciler {
+    /// - Parameter keptFingerprints: fingerprints the caller deliberately kept a copy of,
+    ///   i.e. the `keep` side of a duplicate group. A surviving file with one of these
+    ///   fingerprints is the intended result of deduplication rather than a suspicious
+    ///   leftover, so it is reported as removed instead of ambiguous.
     static func reconcile(
         snapshot: DeletePlanSnapshot,
         summary: DeviceGatewayDeleteSummary,
         catalog: DeviceCatalogSnapshot,
+        keptFingerprints: Set<DeviceFileFingerprint> = [],
         date: Date = Date()
     ) -> DeleteAudit {
         if let expectedIdentity = snapshot.deviceIdentityHash {
@@ -125,8 +130,18 @@ enum DeleteReconciler {
                 outcome = .ambiguous
                 reason = "The device reused this object handle for a different file."
             } else if presentFingerprints[planned.token.fingerprint]?.isEmpty == false {
-                outcome = .ambiguous
-                reason = "A matching file remains under a different device object handle."
+                if keptFingerprints.contains(planned.token.fingerprint) {
+                    // Deduplication: the caller knew an identical copy was being kept, so a
+                    // survivor is the intended outcome. Reporting it as ambiguous made a
+                    // correct Duplicates delete look like a failure.
+                    outcome = .confirmedRemoved
+                    reason = "Removed. An identical copy is kept elsewhere on the device."
+                } else {
+                    // Nothing was supposed to remain, so the device may have renumbered the
+                    // file rather than deleting it. Stay cautious.
+                    outcome = .ambiguous
+                    reason = "A matching file remains under a different device object handle."
+                }
             } else {
                 outcome = .confirmedRemoved
                 reason = nil

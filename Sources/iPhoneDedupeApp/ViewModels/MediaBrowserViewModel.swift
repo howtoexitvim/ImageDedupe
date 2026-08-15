@@ -1329,8 +1329,8 @@ final class MediaBrowserViewModel: ObservableObject {
                     frameworkSummary: summary
                 ),
                 status: failed == 0
-                    ? "Deleted \(removed) item(s). Scan again to confirm."
-                    : "Delete submitted: \(removed) reported removed, \(failed) failed. Scan again to confirm."
+                    ? "Deleted \(removed) item(s). Reopen the app to refresh the device catalog."
+                    : "Delete submitted: \(removed) reported removed, \(failed) failed. Reopen the app to refresh the device catalog."
             )
             // Hide the rows the device reported as deleted, so the list matches what the
             // user just did. This is presentation only: the audit still records the delete
@@ -1363,7 +1363,10 @@ final class MediaBrowserViewModel: ObservableObject {
                 let audit = DeleteReconciler.reconcile(
                     snapshot: snapshot,
                     summary: summary,
-                    catalog: catalog
+                    catalog: catalog,
+                    // Copies the duplicate plan deliberately keeps. A survivor with one of
+                    // these fingerprints is deduplication working, not a failed delete.
+                    keptFingerprints: self.keptDuplicateFingerprints()
                 )
                 self.applyScanPayload(self.makeScanPayload(catalog), preservingImportedDownloads: true)
                 let removed = audit.items.filter { $0.outcome == .confirmedRemoved }.count
@@ -1414,6 +1417,15 @@ final class MediaBrowserViewModel: ObservableObject {
         operationProgress = nil
         operationCancellation = nil
         operationState.finish()
+    }
+
+    /// Fingerprints of the copies the duplicate plan keeps.
+    ///
+    /// Deleting from Duplicates removes the redundant copy and leaves this one, so a file
+    /// matching one of these surviving after a delete is the intended outcome.
+    private func keptDuplicateFingerprints() -> Set<DeviceFileFingerprint> {
+        let keptIDs = Set(duplicatePlan.keep.map(\.id))
+        return Set(allItems.filter { keptIDs.contains($0.id) }.map(\.token.fingerprint))
     }
 
     private func makeScanPayload(_ snapshot: DeviceCatalogSnapshot) -> ScanPayload {
