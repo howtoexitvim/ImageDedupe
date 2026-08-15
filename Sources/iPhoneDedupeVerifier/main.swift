@@ -348,6 +348,13 @@ do {
     switch args.command {
     case "scan":
         try await runScan(timeout: args.timeout)
+    case "flow-check":
+        await FlowCheck.run(
+            timeout: args.timeout,
+            destination: args.destination ?? URL(fileURLWithPath: NSTemporaryDirectory()),
+            deleteTarget: args.targetName,
+            confirmedDelete: args.delete && args.confirmed
+        )
     case "session-check":
         await SessionCheck.run(timeout: args.timeout, pauseSeconds: args.pauseSeconds)
     case "double-scan":

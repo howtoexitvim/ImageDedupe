@@ -234,7 +234,14 @@ final class MediaBrowserViewModel: ObservableObject {
     @Published var duplicatePlan = DuplicatePlan(keep: [], delete: []) {
         didSet { catalogVersion &+= 1 }
     }
-    @Published var importDestination = FileManager.default.urls(for: .picturesDirectory, in: .userDomainMask).first ?? URL(fileURLWithPath: NSHomeDirectory())
+    /// Changing this re-derives the "already downloaded" badges, since the badge answers
+    /// "is this file in *this* folder?" and the answer changes with the folder.
+    @Published var importDestination = FileManager.default.urls(for: .picturesDirectory, in: .userDomainMask).first ?? URL(fileURLWithPath: NSHomeDirectory()) {
+        didSet {
+            guard importDestination != oldValue else { return }
+            refreshImportedBadgesForDestination()
+        }
+    }
     @Published var lastImportedFileURL: URL?
 
     /// Bounded, cancellable admission for per-item device work. Replaces the unbounded
@@ -1073,6 +1080,7 @@ final class MediaBrowserViewModel: ObservableObject {
             }
             reconcileImportedDownloads()
         }
+        adoptDownloadsAlreadyInDestination(items: payload.items)
         recoveryAdvice = nil
         status = "Scanned \(payload.items.count) items. Conservative duplicates: \(payload.plan.delete.count)."
         fputs("ui-scan-succeeded: scanned=\(payload.items.count) duplicates=\(payload.plan.delete.count)\n", stderr)
@@ -1586,6 +1594,44 @@ final class MediaBrowserViewModel: ObservableObject {
     func recordSuccessfulDownload(itemID: String, fileURL: URL) {
         importedFileURLsByItemID[itemID] = fileURL.standardizedFileURL
         importedItemIDs.insert(itemID)
+    }
+
+    /// Rebuilds the badges from scratch against the current destination.
+    ///
+    /// Used when the destination changes: a badge earned in the old folder says nothing
+    /// about the new one, so the previous set is discarded rather than carried over.
+    func refreshImportedBadgesForDestination() {
+        importedItemIDs.removeAll()
+        importedFileURLsByItemID.removeAll()
+        adoptDownloadsAlreadyInDestination(items: allItems)
+    }
+
+    /// Badges every catalog item whose filename is already present in the destination.
+    ///
+    /// Carrying the previous session's badges forward is not enough on its own: on a fresh
+    /// launch, or for anything downloaded in an earlier run, nothing was carried and the
+    /// item showed no tick even though the file was sitting in the destination. Pressing
+    /// Download then answered "Import blocked", because the preflight could see the file
+    /// the badge was hiding.
+    ///
+    /// So the badge is derived from the destination itself, using the preflight's own
+    /// normalization, which is what keeps the two from ever disagreeing again. This reads
+    /// one directory listing per scan.
+    private func adoptDownloadsAlreadyInDestination(items: [MediaItem]) {
+        let destination = importDestination
+        let existing = ImportDestinationPreflight.existingNormalizedFilenames(in: destination)
+        guard !existing.isEmpty else { return }
+
+        for item in items where !importedItemIDs.contains(item.id) {
+            let normalized = ImportDestinationPreflight.normalizedFilename(item.model.name)
+            guard existing.contains(normalized) else { continue }
+            // Recorded against the real path so the badge retires by the same rule as any
+            // other: it disappears when the file does.
+            importedItemIDs.insert(item.id)
+            importedFileURLsByItemID[item.id] = destination
+                .appendingPathComponent(item.model.name)
+                .standardizedFileURL
+        }
     }
 
     /// Reconciles the session badge with the local copy after the user returns from Finder.

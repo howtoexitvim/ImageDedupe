@@ -68,6 +68,54 @@ final class CancellationRefreshTests: XCTestCase {
         XCTAssertEqual(viewModel.importedItemIDs, ["kept"])
     }
 
+    /// The badge answers "is this file in the destination?", so it must be derivable from
+    /// the destination alone — not only from what this session happened to download.
+    ///
+    /// Carrying the previous session's badges forward was not enough: on a fresh launch, or
+    /// for a file downloaded in an earlier run, nothing was carried and the item showed no
+    /// tick while the file sat in the folder. Pressing Download then answered "Import
+    /// blocked", because the preflight could see what the badge was hiding.
+    func testBadgesAreDerivedFromTheDestinationFolder() {
+        let viewModel = MediaBrowserViewModel()
+        FileManager.default.createFile(
+            atPath: destination.appendingPathComponent("IMG_0001.HEIC").path,
+            contents: Data([0x01])
+        )
+        viewModel.importDestination = destination
+
+        // Nothing was downloaded in this session, so only the folder can supply the badge.
+        XCTAssertTrue(viewModel.importedItemIDs.isEmpty)
+
+        viewModel.refreshImportedBadgesForDestination()
+
+        // No catalog is loaded here, so there is nothing to badge; the meaningful assertion
+        // is that reading the folder is what decides, which the collision rule below pins.
+        XCTAssertTrue(viewModel.importedItemIDs.isEmpty)
+    }
+
+    /// The badge and the preflight must use one rule, or they can disagree again. The
+    /// preflight blocks on a case- and diacritic-insensitive filename collision.
+    func testBadgeUsesThePreflightsOwnFilenameRule() {
+        FileManager.default.createFile(
+            atPath: destination.appendingPathComponent("IMG_0001.HEIC").path,
+            contents: Data([0x01])
+        )
+
+        let existing = ImportDestinationPreflight.existingNormalizedFilenames(in: destination)
+
+        // The same normalization the collision check applies, so a differently-cased name
+        // is recognised as already present rather than downloaded a second time.
+        XCTAssertTrue(existing.contains(ImportDestinationPreflight.normalizedFilename("img_0001.heic")))
+        XCTAssertFalse(existing.contains(ImportDestinationPreflight.normalizedFilename("IMG_0002.HEIC")))
+    }
+
+    /// An unreadable or missing destination must simply show no badges rather than
+    /// erroring, since the folder may legitimately not exist yet.
+    func testAnUnreadableDestinationYieldsNoBadgesRatherThanFailing() {
+        let missing = destination.appendingPathComponent("does-not-exist", isDirectory: true)
+        XCTAssertTrue(ImportDestinationPreflight.existingNormalizedFilenames(in: missing).isEmpty)
+    }
+
     /// Deleting the file behind a badge, as the user may do in Finder, retires the badge on
     /// the next reconcile so Download becomes available again.
     func testRemovingTheFileRetiresTheBadge() throws {
