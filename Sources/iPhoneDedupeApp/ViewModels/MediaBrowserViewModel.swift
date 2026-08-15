@@ -65,16 +65,33 @@ final class MediaBrowserViewModel: ObservableObject {
     @Published var isShowingOperationHistory = false
     private let operationResultStore: OperationResultStore
     typealias ImportPreflight = (URL, [ImportDestinationPreflight.Item]) -> ImportDestinationPreflight.Outcome
+    typealias InspectorPreviewRequest = (
+        ICCameraFile,
+        Int,
+        @escaping @Sendable (NSImage?) -> Void
+    ) -> Void
     private let importPreflight: ImportPreflight
+    private let inspectorPreviewRequest: InspectorPreviewRequest
+    private let inspectorPreviewTimeout: Duration
 
     init(
         operationResultStore: OperationResultStore = .applicationSupport(),
         importPreflight: @escaping ImportPreflight = { destination, items in
             ImportDestinationPreflight.inspect(destination: destination, items: items)
+        },
+        inspectorPreviewTimeout: Duration = .seconds(12),
+        inspectorPreviewRequest: @escaping InspectorPreviewRequest = { file, maxPixelSize, completion in
+            InspectorPreviewProvider.requestPreview(
+                for: file,
+                maxPixelSize: maxPixelSize,
+                completion: completion
+            )
         }
     ) {
         self.operationResultStore = operationResultStore
         self.importPreflight = importPreflight
+        self.inspectorPreviewTimeout = inspectorPreviewTimeout
+        self.inspectorPreviewRequest = inspectorPreviewRequest
         let loaded = operationResultStore.load()
         operationHistory = loaded.records
         operationHistoryWarning = loaded.warning
@@ -172,6 +189,7 @@ final class MediaBrowserViewModel: ObservableObject {
     }
     @Published var thumbnailCache: [String: NSImage] = [:]
     @Published var metadataCache: [String: MediaMetadataSummary] = [:]
+    @Published private(set) var inspectorPreviewCache: [String: NSImage] = [:]
     @Published var importedItemIDs: Set<String> = []
     private var importedFileURLsByItemID: [String: URL] = [:]
     @Published var duplicatePlan = DuplicatePlan(keep: [], delete: []) {
@@ -196,6 +214,17 @@ final class MediaBrowserViewModel: ObservableObject {
     private var thumbnailCostByID: [String: Int] = [:]
     private var metadataAccessOrder: [String] = []
     private let maxCachedMetadataSummaries = 768
+
+    private static let inspectorPreviewCountLimit = 8
+    private static let inspectorPreviewCostLimit = 96 * 1_024 * 1_024
+    private var inspectorPreviewAccessOrder: [String] = []
+    private var inspectorPreviewCostByID: [String: Int] = [:]
+    private var inspectorPreviewTotalCost = 0
+    private var inspectorPreviewSelectedID: String?
+    private var inspectorPreviewDesiredItem: MediaItem?
+    private var inspectorPreviewFailedSelectionID: String?
+    private var inspectorPreviewActive: (token: UUID, item: MediaItem, generation: Int)?
+    private var inspectorPreviewTimeoutTask: Task<Void, Never>?
 
     /// Publishes the current filtered order into the selection model so focus, anchor,
     /// and action selection are reconciled exactly once per state change instead of
@@ -664,6 +693,120 @@ final class MediaBrowserViewModel: ObservableObject {
         loadMetadata(for: item)
     }
 
+    func loadInspectorPreview(for item: MediaItem) {
+        let selectionChanged = inspectorPreviewSelectedID != item.id
+        inspectorPreviewSelectedID = item.id
+        inspectorPreviewDesiredItem = item
+        if selectionChanged {
+            inspectorPreviewFailedSelectionID = nil
+        }
+
+        if inspectorPreviewCache[item.id] != nil {
+            touchInspectorPreview(item.id)
+            inspectorPreviewDesiredItem = nil
+            return
+        }
+        startDesiredInspectorPreviewIfPossible()
+    }
+
+    func clearInspectorPreviewSelection() {
+        inspectorPreviewSelectedID = nil
+        inspectorPreviewDesiredItem = nil
+        inspectorPreviewFailedSelectionID = nil
+    }
+
+    func inspectorPreviewImage(for item: MediaItem) -> NSImage? {
+        inspectorPreviewCache[item.id] ?? thumbnailCache[item.id]
+    }
+
+    private func startDesiredInspectorPreviewIfPossible() {
+        guard inspectorPreviewActive == nil,
+              let item = inspectorPreviewDesiredItem,
+              inspectorPreviewCache[item.id] == nil,
+              inspectorPreviewFailedSelectionID != item.id else {
+            return
+        }
+
+        let generation = operationState.generation
+        let token = UUID()
+        inspectorPreviewActive = (token, item, generation)
+        inspectorPreviewDesiredItem = nil
+        let maxPixelSize = InspectorPreviewProvider.requestedMaxPixelSize(
+            width: item.model.width,
+            height: item.model.height
+        )
+        inspectorPreviewTimeoutTask?.cancel()
+        let timeout = inspectorPreviewTimeout
+        inspectorPreviewTimeoutTask = Task { [weak self] in
+            try? await Task.sleep(for: timeout)
+            guard !Task.isCancelled else { return }
+            self?.finishInspectorPreview(token: token, image: nil)
+        }
+        inspectorPreviewRequest(item.cameraFile, maxPixelSize) { [weak self] image in
+            Task { @MainActor in
+                self?.finishInspectorPreview(token: token, image: image)
+            }
+        }
+    }
+
+    private func finishInspectorPreview(token: UUID, image: NSImage?) {
+        guard let active = inspectorPreviewActive, active.token == token else { return }
+        inspectorPreviewTimeoutTask?.cancel()
+        inspectorPreviewTimeoutTask = nil
+        inspectorPreviewActive = nil
+
+        guard operationState.isCurrent(generation: active.generation) else { return }
+        if let image {
+            insertInspectorPreview(image, for: active.item.id)
+        } else if inspectorPreviewSelectedID == active.item.id {
+            inspectorPreviewFailedSelectionID = active.item.id
+        }
+        startDesiredInspectorPreviewIfPossible()
+    }
+
+    private func insertInspectorPreview(_ image: NSImage, for id: String) {
+        if let previousCost = inspectorPreviewCostByID[id] {
+            inspectorPreviewTotalCost -= previousCost
+        }
+        inspectorPreviewAccessOrder.removeAll { $0 == id }
+
+        let cost = Self.thumbnailCost(of: image)
+        inspectorPreviewCache[id] = image
+        inspectorPreviewCostByID[id] = cost
+        inspectorPreviewTotalCost += cost
+        inspectorPreviewAccessOrder.append(id)
+        trimInspectorPreviewCacheIfNeeded()
+    }
+
+    private func touchInspectorPreview(_ id: String) {
+        inspectorPreviewAccessOrder.removeAll { $0 == id }
+        inspectorPreviewAccessOrder.append(id)
+    }
+
+    private func trimInspectorPreviewCacheIfNeeded() {
+        while inspectorPreviewCache.count > Self.inspectorPreviewCountLimit
+            || (inspectorPreviewTotalCost > Self.inspectorPreviewCostLimit
+                && !inspectorPreviewAccessOrder.isEmpty) {
+            let id = inspectorPreviewAccessOrder.removeFirst()
+            inspectorPreviewCache.removeValue(forKey: id)
+            inspectorPreviewTotalCost -= inspectorPreviewCostByID.removeValue(forKey: id) ?? 0
+        }
+        inspectorPreviewTotalCost = max(0, inspectorPreviewTotalCost)
+    }
+
+    private func resetInspectorPreviews() {
+        inspectorPreviewTimeoutTask?.cancel()
+        inspectorPreviewTimeoutTask = nil
+        inspectorPreviewSelectedID = nil
+        inspectorPreviewDesiredItem = nil
+        inspectorPreviewFailedSelectionID = nil
+        inspectorPreviewActive = nil
+        inspectorPreviewCache.removeAll()
+        inspectorPreviewAccessOrder.removeAll()
+        inspectorPreviewCostByID.removeAll()
+        inspectorPreviewTotalCost = 0
+    }
+
     nonisolated private static func scanDevice(timeoutSeconds: TimeInterval) throws -> ScanPayload {
         let result = try DeviceSessionController(timeoutSeconds: timeoutSeconds).scan()
         let items = result.files.map { MediaItem(model: $0.model, cameraFile: $0.cameraFile) }
@@ -679,6 +822,7 @@ final class MediaBrowserViewModel: ObservableObject {
         // The previous session's outstanding requests are meaningless now.
         thumbnailRequests.cancelAll()
         metadataRequests.cancelAll()
+        resetInspectorPreviews()
         // A scan can land while the user is mid-word. Applying the pending query now keeps
         // the visible field and the filtered catalog in agreement, instead of showing an
         // unfiltered list under a non-empty search box until the debounce fires.
