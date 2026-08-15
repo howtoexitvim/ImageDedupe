@@ -10,7 +10,7 @@ fi
 app_path="$1"
 allow_adhoc="${2:-}"
 contents_path="$app_path/Contents"
-executable="$contents_path/MacOS/iPhoneDedupeApp"
+executable="$contents_path/MacOS/ImageDedupeApp"
 manifest="$contents_path/Resources/PrivacyInfo.xcprivacy"
 
 [[ -d "$app_path" && -f "$executable" && -f "$manifest" ]] || {
@@ -38,8 +38,8 @@ print -r -- "$entitlements" | grep -Eq 'com\.apple\.security\.cs\.(allow-jit|all
 # The bundle ships exactly two executables: the app, and the device helper each scan runs
 # in a fresh process. Naming them beats counting them — a count of two would also be
 # satisfied by an unexpected binary that displaced the helper.
-expected_executables="iPhoneDedupeApp
-iPhoneDedupeHelper"
+expected_executables="ImageDedupeApp
+ImageDedupeHelper"
 actual_executables="$(find "$contents_path/MacOS" -type f -perm -111 -exec basename {} \; | sort)"
 [[ "$actual_executables" == "$expected_executables" ]] || {
     print -u2 "release verification failed: unexpected executables in MacOS:"
@@ -49,7 +49,7 @@ actual_executables="$(find "$contents_path/MacOS" -type f -perm -111 -exec basen
 
 # The helper is nested code and must carry its own valid signature; if the outer bundle
 # were signed first, this is what would catch it.
-codesign --verify --strict "$contents_path/MacOS/iPhoneDedupeHelper" || {
+codesign --verify --strict "$contents_path/MacOS/ImageDedupeHelper" || {
     print -u2 "release verification failed: the device helper is not validly signed"
     exit 1
 }

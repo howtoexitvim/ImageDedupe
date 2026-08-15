@@ -24,7 +24,7 @@ print -r -- "$codesign_details" | grep -q 'Authority=Developer ID Application:' 
     exit 1
 }
 
-temporary_directory="$(mktemp -d "${TMPDIR:-/tmp}/iphone-dedupe-notary.XXXXXX")"
+temporary_directory="$(mktemp -d "${TMPDIR:-/tmp}/image-dedupe-notary.XXXXXX")"
 trap 'rm -rf "$temporary_directory"' EXIT
 archive_path="$temporary_directory/iPhone-Dedupe.zip"
 result_path="$temporary_directory/notary-result.json"

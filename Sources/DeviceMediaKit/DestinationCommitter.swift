@@ -153,7 +153,7 @@ public enum DestinationCommitter {
             )
         }
 
-        let temporaryName = ".iphone-dedupe-commit-\(UUID().uuidString)"
+        let temporaryName = ".image-dedupe-commit-\(UUID().uuidString)"
         let temporaryFD = temporaryName.withCString {
             openat(destinationFD, $0, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0o600)
         }

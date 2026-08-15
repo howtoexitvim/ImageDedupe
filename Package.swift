@@ -21,17 +21,17 @@ let package = Package(
             dependencies: ["DeduperCore"]
         ),
         .executableTarget(
-            name: "iPhoneDedupeApp",
+            name: "ImageDedupeApp",
             dependencies: ["DeduperCore", "DeviceMediaKit"]
         ),
         .executableTarget(
-            name: "iPhoneDedupeVerifier",
+            name: "ImageDedupeVerifier",
             dependencies: ["DeduperCore", "DeviceMediaKit"]
         ),
         // A short-lived process owning one ImageCaptureCore client, so each scan gets a
-        // genuinely fresh device catalog. See Sources/iPhoneDedupeHelper/main.swift.
+        // genuinely fresh device catalog. See Sources/ImageDedupeHelper/main.swift.
         .executableTarget(
-            name: "iPhoneDedupeHelper",
+            name: "ImageDedupeHelper",
             dependencies: ["DeduperCore", "DeviceMediaKit"]
         ),
         .testTarget(
@@ -39,8 +39,8 @@ let package = Package(
             dependencies: ["DeduperCore"]
         ),
         .testTarget(
-            name: "iPhoneDedupeAppTests",
-            dependencies: ["iPhoneDedupeApp", "DeviceMediaKit"]
+            name: "ImageDedupeAppTests",
+            dependencies: ["ImageDedupeApp", "DeviceMediaKit"]
         ),
     ]
 )

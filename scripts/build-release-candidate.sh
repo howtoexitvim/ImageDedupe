@@ -15,29 +15,29 @@ if [[ -z "$signing_identity" ]]; then
 fi
 
 bin_path="$(swift build --package-path "$repo_root" -c release --show-bin-path)"
-app_path="$bin_path/iPhone Dedupe.app"
+app_path="$bin_path/Image Dedupe.app"
 contents_path="$app_path/Contents"
-"$repo_root/scripts/refuse-running-bundle.sh" "$contents_path/MacOS/iPhoneDedupeApp"
+"$repo_root/scripts/refuse-running-bundle.sh" "$contents_path/MacOS/ImageDedupeApp"
 
 swift build --package-path "$repo_root" -c release
 
 mkdir -p "$contents_path/MacOS" "$contents_path/Resources"
-cp "$bin_path/iPhoneDedupeApp" "$contents_path/MacOS/iPhoneDedupeApp"
+cp "$bin_path/ImageDedupeApp" "$contents_path/MacOS/ImageDedupeApp"
 # The device helper ships beside the app executable. Scanning *is* a helper process, so a
 # bundle without this binary fails every scan — which is what a release candidate did until
 # 2026-08-16, because only the debug script was updated when the helper was introduced.
-cp "$bin_path/iPhoneDedupeHelper" "$contents_path/MacOS/iPhoneDedupeHelper"
+cp "$bin_path/ImageDedupeHelper" "$contents_path/MacOS/ImageDedupeHelper"
 cp "$repo_root/Packaging/Info.plist" "$contents_path/Info.plist"
 cp "$repo_root/Packaging/PrivacyInfo.xcprivacy" "$contents_path/Resources/PrivacyInfo.xcprivacy"
 
 # Nested code must be signed before the bundle that contains it: signing the outer bundle
 # seals the helper's signature, so the reverse order invalidates the app.
 if [[ "$signing_identity" == "-" ]]; then
-    codesign --force --options runtime --sign - "$contents_path/MacOS/iPhoneDedupeHelper"
+    codesign --force --options runtime --sign - "$contents_path/MacOS/ImageDedupeHelper"
     codesign --force --options runtime --sign - "$app_path"
     "$repo_root/scripts/verify-release.sh" "$app_path" --allow-adhoc
 else
-    codesign --force --options runtime --timestamp --sign "$signing_identity" "$contents_path/MacOS/iPhoneDedupeHelper"
+    codesign --force --options runtime --timestamp --sign "$signing_identity" "$contents_path/MacOS/ImageDedupeHelper"
     codesign --force --options runtime --timestamp --sign "$signing_identity" "$app_path"
     "$repo_root/scripts/verify-release.sh" "$app_path"
 fi

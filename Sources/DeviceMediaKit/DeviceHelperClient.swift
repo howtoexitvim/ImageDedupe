@@ -62,7 +62,7 @@ public actor DeviceHelperClient {
     /// Locates the helper next to the running executable, which is where SwiftPM and the
     /// app bundle both place it.
     public static func bundledExecutableURL(
-        named name: String = "iPhoneDedupeHelper",
+        named name: String = "ImageDedupeHelper",
         fileManager: FileManager = .default
     ) -> URL? {
         let candidates = [
