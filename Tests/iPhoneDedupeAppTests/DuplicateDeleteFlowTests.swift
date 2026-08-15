@@ -305,6 +305,125 @@ final class DuplicateDeleteFlowTests: XCTestCase {
         XCTAssertTrue(viewModel.visibleItems.isEmpty)
     }
 
+    /// The fingerprints handed to verification must describe the copies being *kept*.
+    ///
+    /// Reported on 2026-08-16: deleting two duplicate groups at once reported both as
+    /// "Still present". A kept copy shares its fingerprint with the copy that was deleted,
+    /// so verification cannot confirm the delete without being told which fingerprints are
+    /// deliberate survivors.
+    func testKeptFingerprintsCoverEveryGroupBeingDeletedFrom() {
+        let viewModel = makeViewModel()
+        viewModel.allItems = [
+            item(id: "a1", name: "A.HEIC"),
+            item(id: "a2", name: "A.HEIC"),
+            item(id: "b1", name: "B.HEIC"),
+            item(id: "b2", name: "B.HEIC"),
+            item(id: "b3", name: "B.HEIC")
+        ]
+        viewModel.recomputeDuplicatePlanForTesting()
+
+        let kept = viewModel.keptDuplicateFingerprintsForTesting()
+
+        // Both groups must be represented, or the group missing from the set reports its
+        // delete as unconfirmed.
+        XCTAssertEqual(kept.count, 2, "One fingerprint per duplicate group.")
+        XCTAssertTrue(kept.contains(viewModel.allItems[0].token.fingerprint))
+        XCTAssertTrue(kept.contains(viewModel.allItems[2].token.fingerprint))
+    }
+
+    /// The set must survive the rows being hidden. Verification runs after the delete, by
+    /// which point the deleted rows may already be gone from `allItems`.
+    func testKeptFingerprintsSurviveTheDeletedRowsBeingRemoved() {
+        let viewModel = makeViewModel()
+        viewModel.allItems = [
+            item(id: "a1", name: "A.HEIC"),
+            item(id: "a2", name: "A.HEIC")
+        ]
+        viewModel.recomputeDuplicatePlanForTesting()
+
+        // The redundant copy is hidden as soon as the device reports it removed.
+        viewModel.applySuccessfulDeletion(itemIDs: ["a2"])
+
+        let kept = viewModel.keptDuplicateFingerprintsForTesting()
+        XCTAssertFalse(
+            kept.isEmpty,
+            "The kept copy's fingerprint must still be known when verification runs."
+        )
+    }
+
+    /// Switching scope must clear the action selection.
+    ///
+    /// Reported on 2026-08-16: items ticked in Duplicates were still selected after
+    /// switching to All Media. That is worse than untidy — Delete acts on the action
+    /// selection, so a user who selected a group in Duplicates, switched away, and pressed
+    /// Delete would be acting on files they can no longer see in context.
+    func testSwitchingScopeClearsTheActionSelection() {
+        let viewModel = makeViewModel()
+        viewModel.allItems = [
+            item(id: "a1", name: "A.HEIC"),
+            item(id: "a2", name: "A.HEIC"),
+            item(id: "solo", name: "SOLO.HEIC")
+        ]
+        viewModel.recomputeDuplicatePlanForTesting()
+        viewModel.selectReviewScope(.duplicates)
+        viewModel.toggleActionSelection(withID: "a2")
+        XCTAssertEqual(viewModel.selectedActionIDs, ["a2"])
+
+        viewModel.selectReviewScope(.allMedia)
+
+        XCTAssertTrue(
+            viewModel.selectedActionIDs.isEmpty,
+            "A selection made in another scope must not silently survive the switch."
+        )
+    }
+
+    /// Focus is cleared with it, so the inspector does not keep showing a file the new
+    /// scope may not list.
+    func testSwitchingScopeClearsFocusToo() {
+        let viewModel = makeViewModel()
+        viewModel.allItems = [
+            item(id: "a1", name: "A.HEIC"),
+            item(id: "a2", name: "A.HEIC")
+        ]
+        viewModel.recomputeDuplicatePlanForTesting()
+        viewModel.selectReviewScope(.duplicates)
+        viewModel.selectItem(withID: "a2")
+        XCTAssertEqual(viewModel.selectedItemID, "a2")
+
+        viewModel.selectReviewScope(.allMedia)
+
+        XCTAssertNil(viewModel.selectedItemID)
+    }
+
+    /// Re-selecting the scope already showing must not clear a selection in progress.
+    func testReselectingTheSameScopeKeepsTheSelection() {
+        let viewModel = makeViewModel()
+        viewModel.allItems = [item(id: "a1", name: "A.HEIC"), item(id: "a2", name: "A.HEIC")]
+        viewModel.recomputeDuplicatePlanForTesting()
+        viewModel.selectReviewScope(.duplicates)
+        viewModel.toggleActionSelection(withID: "a2")
+
+        viewModel.selectReviewScope(.duplicates)
+
+        XCTAssertEqual(viewModel.selectedActionIDs, ["a2"])
+    }
+
+    /// A pending delete is planned against the files visible when it was confirmed, so
+    /// changing scope must retire it rather than let it fire against a different view.
+    func testSwitchingScopeDiscardsAPendingDeleteSnapshot() {
+        let viewModel = makeViewModel()
+        viewModel.allItems = [item(id: "a1", name: "A.HEIC"), item(id: "a2", name: "A.HEIC")]
+        viewModel.recomputeDuplicatePlanForTesting()
+        viewModel.selectReviewScope(.duplicates)
+        viewModel.toggleActionSelection(withID: "a2")
+        viewModel.requestDeleteConfirmation()
+        XCTAssertNotNil(viewModel.pendingDeleteSnapshot)
+
+        viewModel.selectReviewScope(.allMedia)
+
+        XCTAssertNil(viewModel.pendingDeleteSnapshot)
+    }
+
     // MARK: - Results sheet must not interrupt a clean delete
 
     func testCleanDeleteDoesNotAutoPresentTheResultsSheet() async {

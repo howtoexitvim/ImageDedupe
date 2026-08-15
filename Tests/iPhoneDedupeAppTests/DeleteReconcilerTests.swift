@@ -191,4 +191,45 @@ final class DeleteReconcilerTests: XCTestCase {
             }
         )
     }
+
+    /// Deleting the redundant copy of a duplicate group.
+    ///
+    /// Reported on 2026-08-16: deleting two groups at once reported both as "Still present"
+    /// even though the framework said success. The kept copy of a duplicate has the *same
+    /// fingerprint* as the copy that was deleted, so a fingerprint-only presence check can
+    /// never confirm this delete — it always finds a survivor. `keptFingerprints` is what
+    /// distinguishes "a copy survives because we meant it to" from "nothing was removed".
+    func testDeletingADuplicateWhoseTwinIsKeptIsConfirmed() {
+        let deleted = plannedItem(handle: 0, name: "WDAW8576.JPG")
+        // The kept twin: identical fingerprint, still in the catalog afterwards.
+        let survivor = plannedItem(handle: 0, name: "WDAW8576.JPG")
+
+        let audit = DeleteReconciler.reconcile(
+            snapshot: DeletePlanSnapshot(deviceName: "iPhone", items: [deleted]),
+            summary: DeviceGatewayDeleteSummary(successful: [deleted.token]),
+            catalog: catalog(containing: survivor, generation: survivor.token.generation),
+            keptFingerprints: [deleted.token.fingerprint]
+        )
+
+        XCTAssertEqual(
+            audit.items.first?.outcome,
+            .confirmedRemoved,
+            "A surviving copy the plan deliberately keeps is deduplication working."
+        )
+    }
+
+    /// Without that signal the same catalog must stay cautious, since an identical file
+    /// remaining could equally mean nothing was deleted.
+    func testTheSameCatalogWithoutAKeptFingerprintStaysCautious() {
+        let deleted = plannedItem(handle: 0, name: "WDAW8576.JPG")
+        let survivor = plannedItem(handle: 0, name: "WDAW8576.JPG")
+
+        let audit = DeleteReconciler.reconcile(
+            snapshot: DeletePlanSnapshot(deviceName: "iPhone", items: [deleted]),
+            summary: DeviceGatewayDeleteSummary(successful: [deleted.token]),
+            catalog: catalog(containing: survivor, generation: survivor.token.generation)
+        )
+
+        XCTAssertEqual(audit.items.first?.outcome, .stillPresent)
+    }
 }

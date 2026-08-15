@@ -989,8 +989,26 @@ final class MediaBrowserViewModel: ObservableObject {
         )
     }
 
+    /// Switches between All Media and Duplicates, clearing what the previous scope selected.
+    ///
+    /// A selection made in one scope has no meaning in the other, and leaving it in place is
+    /// not merely untidy: Delete acts on the action selection, so a user who ticked a
+    /// duplicate group, switched to All Media, and pressed Delete would be acting on files
+    /// they can no longer see in context. Reported on 2026-08-16.
+    ///
+    /// Any pending delete goes with it, since that snapshot was confirmed against the files
+    /// the previous scope was showing.
     func selectReviewScope(_ scope: MediaReviewScope) {
+        guard scope != reviewScope else { return }
         reviewScope = scope
+        // Cleared directly rather than via `clearSelection()`, which is the Escape-key path
+        // and only acts while the media browser owns focus — switching scope from the
+        // sidebar does not.
+        selection.actionSelectedIDs.removeAll()
+        selection.focusedID = nil
+        selection.anchorID = nil
+        pendingDeleteSnapshot = nil
+        isConfirmingDelete = false
         refreshVisibleOrder()
     }
 
@@ -1658,6 +1676,10 @@ final class MediaBrowserViewModel: ObservableObject {
     ///
     /// Deleting from Duplicates removes the redundant copy and leaves this one, so a file
     /// matching one of these surviving after a delete is the intended outcome.
+    func keptDuplicateFingerprintsForTesting() -> Set<DeviceFileFingerprint> {
+        keptDuplicateFingerprints()
+    }
+
     private func keptDuplicateFingerprints() -> Set<DeviceFileFingerprint> {
         let keptIDs = Set(duplicatePlan.keep.map(\.id))
         return Set(allItems.filter { keptIDs.contains($0.id) }.map(\.token.fingerprint))
