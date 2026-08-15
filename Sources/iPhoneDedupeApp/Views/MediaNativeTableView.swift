@@ -129,19 +129,17 @@ final class MediaNativeTableView: NSTableView {
                 didBeginDrag = true
             }
 
-            // A pointer dragged outside the window stops extending the selection; it would
-            // otherwise keep checking rows the user cannot see.
-            guard let window,
-                  MediaScrollGeometry.dragShouldExtend(
-                      pointInWindow: event.locationInWindow,
-                      windowBounds: window.contentLayoutRect
-                  ) else {
+            // Dragging above or below the list keeps auto-scrolling, even off the window,
+            // which is what makes long selections possible. Only a pointer that has
+            // wandered far sideways stops extending.
+            let pointInView = convert(event.locationInWindow, from: nil)
+            guard MediaScrollGeometry.dragShouldExtend(at: pointInView, viewport: visibleRect) else {
                 stopAutoScroll()
                 continue
             }
 
             lastDragPointInWindow = event.locationInWindow
-            let point = convert(event.locationInWindow, from: nil)
+            let point = pointInView
             let draggedRow = clampedRow(at: point)
             coordinator.controller.updateDrag(toRow: draggedRow)
             coordinator.refreshFocusDecoration()

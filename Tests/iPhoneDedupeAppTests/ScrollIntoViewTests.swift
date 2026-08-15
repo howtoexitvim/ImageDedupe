@@ -96,58 +96,88 @@ final class ScrollIntoViewTests: XCTestCase {
         XCTAssertEqual(MediaTableMetrics.autoScrollVelocity(pointerY: 10, viewportHeight: 30), 0)
     }
 
-    // MARK: - Leaving the window abandons the drag
+    // MARK: - How far a drag may stray
 
-    private let windowBounds = NSRect(x: 0, y: 0, width: 1_000, height: 700)
+    func testDragInsideTheViewportExtends() {
+        XCTAssertTrue(
+            MediaScrollGeometry.dragShouldExtend(at: NSPoint(x: 400, y: 300), viewport: viewport)
+        )
+    }
 
-    func testDragInsideTheWindowExtends() {
+    /// Finder keeps auto-scrolling while the pointer rests far above or below the list,
+    /// including off the window. Unlimited vertical overshoot is the whole point of edge
+    /// auto-scroll, so these must keep extending.
+    func testDragFarBelowTheViewportStillExtends() {
+        XCTAssertTrue(
+            MediaScrollGeometry.dragShouldExtend(at: NSPoint(x: 400, y: -5_000), viewport: viewport)
+        )
+    }
+
+    func testDragFarAboveTheViewportStillExtends() {
+        XCTAssertTrue(
+            MediaScrollGeometry.dragShouldExtend(at: NSPoint(x: 400, y: 9_000), viewport: viewport)
+        )
+    }
+
+    /// Regression: a pointer dragged sideways out of the app kept selecting items the user
+    /// could not see.
+    func testDragFarToTheRightStopsExtending() {
+        XCTAssertFalse(
+            MediaScrollGeometry.dragShouldExtend(at: NSPoint(x: 3_000, y: 300), viewport: viewport)
+        )
+    }
+
+    func testDragFarToTheLeftStopsExtending() {
+        XCTAssertFalse(
+            MediaScrollGeometry.dragShouldExtend(at: NSPoint(x: -3_000, y: 300), viewport: viewport)
+        )
+    }
+
+    /// Ordinary sloppy dragging just past the side of the list keeps working.
+    func testSlightHorizontalOvershootStillExtends() {
         XCTAssertTrue(
             MediaScrollGeometry.dragShouldExtend(
-                pointInWindow: NSPoint(x: 500, y: 350),
-                windowBounds: windowBounds
+                at: NSPoint(x: viewport.maxX + 40, y: 300),
+                viewport: viewport
             )
         )
     }
 
-    /// Regression: dragging out of the app kept selecting items the user could not see.
-    func testDragPastTheRightEdgeOfTheWindowStopsExtending() {
-        XCTAssertFalse(
-            MediaScrollGeometry.dragShouldExtend(
-                pointInWindow: NSPoint(x: 1_400, y: 350),
-                windowBounds: windowBounds
-            )
-        )
+    // MARK: - Auto-scroll past the edge
+
+    /// Regression: the velocity clamped the pointer back into the viewport, so a drag well
+    /// past an edge computed a smaller depth. Scrolling stalled or ran backwards.
+    func testDragFarAboveTheTopScrollsUpAtFullSpeed() {
+        let velocity = MediaTableMetrics.autoScrollVelocity(pointerY: -800, viewportHeight: 400)
+        XCTAssertEqual(velocity, -MediaTableMetrics.maximumAutoScrollVelocity)
     }
 
-    func testDragBelowTheWindowStopsExtending() {
-        XCTAssertFalse(
-            MediaScrollGeometry.dragShouldExtend(
-                pointInWindow: NSPoint(x: 500, y: -200),
-                windowBounds: windowBounds
-            )
-        )
+    func testDragFarBelowTheBottomScrollsDownAtFullSpeed() {
+        let velocity = MediaTableMetrics.autoScrollVelocity(pointerY: 1_200, viewportHeight: 400)
+        XCTAssertEqual(velocity, MediaTableMetrics.maximumAutoScrollVelocity)
     }
 
-    func testDragAboveTheWindowStopsExtending() {
-        XCTAssertFalse(
-            MediaScrollGeometry.dragShouldExtend(
-                pointInWindow: NSPoint(x: 500, y: 900),
-                windowBounds: windowBounds
+    /// Direction must never flip as the pointer travels further past an edge.
+    func testVelocityNeverReversesAsThePointerTravelsFurtherOut() {
+        for y in stride(from: 0.0, through: -2_000.0, by: -50.0) {
+            XCTAssertLessThan(
+                MediaTableMetrics.autoScrollVelocity(pointerY: y, viewportHeight: 400),
+                0,
+                "should still scroll up at pointerY=\(y)"
             )
-        )
+        }
+        for y in stride(from: 400.0, through: 2_400.0, by: 50.0) {
+            XCTAssertGreaterThan(
+                MediaTableMetrics.autoScrollVelocity(pointerY: y, viewportHeight: 400),
+                0,
+                "should still scroll down at pointerY=\(y)"
+            )
+        }
     }
 
-    /// Overshooting the *viewport* while still inside the window must keep extending —
-    /// that is exactly how edge auto-scroll reaches content past the fold.
-    func testDragPastTheViewportButInsideTheWindowStillExtends() {
-        // Viewport occupies the middle of the window; the pointer is below it but the
-        // pointer is still within the window.
-        XCTAssertTrue(
-            MediaScrollGeometry.dragShouldExtend(
-                pointInWindow: NSPoint(x: 500, y: 10),
-                windowBounds: windowBounds
-            )
-        )
+    /// The trigger band is wide enough to find without precision aiming.
+    func testEdgeBandIsGenerousEnoughToHit() {
+        XCTAssertGreaterThanOrEqual(MediaTableMetrics.autoScrollMargin, 40)
     }
 
     // MARK: - Marquee rectangle

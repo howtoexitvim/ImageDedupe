@@ -45,17 +45,26 @@ enum MediaScrollGeometry {
         return nil
     }
 
-    /// Whether a drag at `pointInWindow` should still extend the selection.
+    /// How far horizontally outside the browser a drag may stray before it stops
+    /// extending. Vertical overshoot is deliberately unlimited.
+    static let horizontalDragAbandonMargin: CGFloat = 160
+
+    /// Whether a drag at `point` should still extend the selection.
     ///
-    /// Vertical overshoot past the viewport is allowed and expected: holding the pointer
-    /// below the last visible row is exactly how edge auto-scroll walks to the end of a
-    /// long catalog, so the row is clamped to the nearest edge and the selection grows.
+    /// This models Finder and Explorer, where dragging *above or below* the list — even
+    /// off the window and across the desktop — keeps auto-scrolling and selecting. That is
+    /// the whole point of edge auto-scroll: the pointer must be able to rest outside the
+    /// bounds while the content streams past it. So vertical overshoot is unlimited.
     ///
-    /// Leaving the **window** is different. There the user has taken the pointer somewhere
-    /// with no relationship to the list, and continuing to select items they cannot see is
-    /// surprising. This is checked in window coordinates for exactly that reason.
-    static func dragShouldExtend(pointInWindow: NSPoint, windowBounds: NSRect) -> Bool {
-        windowBounds.contains(pointInWindow)
+    /// Horizontal overshoot is different. A pointer dragged far to the left or right has
+    /// left the list entirely, and continuing to select there is the surprising behaviour
+    /// reported on 2026-08-15. A generous margin keeps ordinary sloppy dragging working
+    /// while stopping a pointer that has genuinely wandered off.
+    ///
+    /// `point` and `viewport` must share a coordinate space.
+    static func dragShouldExtend(at point: NSPoint, viewport: NSRect) -> Bool {
+        point.x >= viewport.minX - horizontalDragAbandonMargin
+            && point.x <= viewport.maxX + horizontalDragAbandonMargin
     }
 
     /// The marquee rectangle between two points, normalized so dragging in any direction

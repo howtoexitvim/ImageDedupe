@@ -154,19 +154,16 @@ final class MediaNativeCollectionView: NSCollectionView {
                 didBegin = true
             }
 
-            // A pointer dragged outside the window stops extending the marquee; it would
-            // otherwise keep selecting items the user cannot see.
-            guard let window,
-                  MediaScrollGeometry.dragShouldExtend(
-                      pointInWindow: event.locationInWindow,
-                      windowBounds: window.contentLayoutRect
-                  ) else {
+            // Dragging above or below the grid keeps auto-scrolling, even off the window.
+            // Only a pointer that has wandered far sideways stops extending.
+            let pointInView = convert(event.locationInWindow, from: nil)
+            guard MediaScrollGeometry.dragShouldExtend(at: pointInView, viewport: visibleRect) else {
                 stopAutoScroll()
                 continue
             }
 
             lastDragPointInWindow = event.locationInWindow
-            updateMarquee(to: convert(event.locationInWindow, from: nil))
+            updateMarquee(to: pointInView)
             updateAutoScroll(for: event)
         }
 
@@ -218,7 +215,14 @@ final class MediaNativeCollectionView: NSCollectionView {
 
     private func stepAutoScroll() {
         guard let clipView = enclosingScrollView?.contentView,
-              let pointInWindow = lastDragPointInWindow else { return }
+              let pointInWindow = lastDragPointInWindow,
+              // The timer runs in `.common` mode, so it keeps firing after the drag loop
+              // has decided to stop extending. Without this the marquee kept growing from
+              // a stale point once the pointer wandered sideways off the grid.
+              MediaScrollGeometry.dragShouldExtend(
+                  at: convert(pointInWindow, from: nil),
+                  viewport: visibleRect
+              ) else { return }
 
         let pointInClip = clipView.convert(pointInWindow, from: nil)
         let pointerY = clipView.bounds.maxY - pointInClip.y
