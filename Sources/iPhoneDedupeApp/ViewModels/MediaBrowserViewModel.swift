@@ -60,6 +60,18 @@ final class MediaBrowserViewModel: ObservableObject {
     /// operation succeeded. Drives the recovery banner.
     @Published var recoveryAdvice: DeviceRecoveryAdvice?
 
+    @Published private(set) var operationHistory: [OperationResultRecord] = []
+    @Published private(set) var operationHistoryWarning: String?
+    @Published var isShowingOperationHistory = false
+    private let operationResultStore: OperationResultStore
+
+    init(operationResultStore: OperationResultStore = .applicationSupport()) {
+        self.operationResultStore = operationResultStore
+        let loaded = operationResultStore.load()
+        operationHistory = loaded.records
+        operationHistoryWarning = loaded.warning
+    }
+
     func dismissRecoveryAdvice() {
         recoveryAdvice = nil
     }
@@ -525,7 +537,7 @@ final class MediaBrowserViewModel: ObservableObject {
                         }
                     }
                 )
-                await self.applyDeleteSummary(summary, requestedIDs: Set(items.map(\.id)))
+                await self.applyDeleteSummary(summary, requestedItems: items)
             } catch {
                 await self.applyDeleteFailure("\(error)")
             }
@@ -540,6 +552,20 @@ final class MediaBrowserViewModel: ObservableObject {
         operationProgress = progress
         status = progress.detail
         _ = operationCancellation?.cancel()
+    }
+
+    func showOperationHistory() {
+        isShowingOperationHistory = true
+    }
+
+    func clearOperationHistory() {
+        do {
+            try operationResultStore.clear()
+            operationHistory = []
+            operationHistoryWarning = nil
+        } catch {
+            operationHistoryWarning = "Saved operation results could not be cleared: \(error.localizedDescription)"
+        }
     }
 
     /// Requests the destructive confirmation sheet. Does not delete anything.
@@ -730,12 +756,28 @@ final class MediaBrowserViewModel: ObservableObject {
             .map(\.id)
         importedItemIDs.formUnion(successfulIDs)
         status = "Imported \(summary.successful.count) item(s), \(summary.failed.count) failed, \(summary.canceled.count) canceled."
+        persistOperationResult(OperationResultRecord(
+            id: UUID(),
+            date: Date(),
+            kind: .importing,
+            destinationPath: destination.path,
+            requestedCount: requestedItems.count,
+            successfulCount: summary.successful.count,
+            failures: summary.failed.map { failure in
+                OperationResultRecord.Failure(
+                    filename: failure.file.name ?? "Unknown file",
+                    reason: failure.error.localizedDescription
+                )
+            },
+            canceledFilenames: summary.canceled.map { $0.name ?? "Unknown file" }
+        ))
         operationProgress = nil
         operationCancellation = nil
         operationState.finish()
     }
 
-    private func applyDeleteSummary(_ summary: DeviceDeleteSummary, requestedIDs: Set<String>) {
+    private func applyDeleteSummary(_ summary: DeviceDeleteSummary, requestedItems: [MediaItem]) {
+        let requestedIDs = Set(requestedItems.map(\.id))
         let successfulHandles = Set(summary.successful.map(\.ptpObjectHandle))
         allItems.removeAll { item in
             requestedIDs.contains(item.id) && successfulHandles.contains(item.cameraFile.ptpObjectHandle)
@@ -743,6 +785,22 @@ final class MediaBrowserViewModel: ObservableObject {
         duplicatePlan = DuplicatePlanner.plan(files: allItems.map(\.model), rule: .nameKindSize)
         refreshVisibleOrder()
         status = "Deleted \(summary.successful.count) item(s), \(summary.failed.count) failed, \(summary.canceled.count) canceled."
+        let failureReason = summary.error?.localizedDescription ?? "The device did not delete this item."
+        persistOperationResult(OperationResultRecord(
+            id: UUID(),
+            date: Date(),
+            kind: .deleting,
+            destinationPath: nil,
+            requestedCount: requestedItems.count,
+            successfulCount: summary.successful.count,
+            failures: summary.failed.map {
+                OperationResultRecord.Failure(
+                    filename: $0.name ?? "Unknown file",
+                    reason: failureReason
+                )
+            },
+            canceledFilenames: summary.canceled.map { $0.name ?? "Unknown file" }
+        ))
         operationProgress = nil
         operationCancellation = nil
         operationState.finish()
@@ -768,6 +826,18 @@ final class MediaBrowserViewModel: ObservableObject {
         progress.apply(update)
         operationProgress = progress
         status = progress.detail
+    }
+
+    private func persistOperationResult(_ record: OperationResultRecord) {
+        guard record.hasIssues else { return }
+        do {
+            operationHistory = try operationResultStore.append(record)
+            operationHistoryWarning = nil
+            isShowingOperationHistory = true
+        } catch {
+            operationHistoryWarning = "This result could not be saved: \(error.localizedDescription)"
+            status += " The detailed result could not be saved."
+        }
     }
 
     private func trimMetadataCacheIfNeeded() {

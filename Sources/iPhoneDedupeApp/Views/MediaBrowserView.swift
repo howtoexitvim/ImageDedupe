@@ -82,6 +82,14 @@ struct MediaBrowserView: View {
             panePreferences.reset()
             columnVisibility = .all
         }
+        .sheet(isPresented: $viewModel.isShowingOperationHistory) {
+            OperationHistoryView(
+                records: viewModel.operationHistory,
+                warning: viewModel.operationHistoryWarning,
+                onClear: { viewModel.clearOperationHistory() },
+                onDone: { viewModel.isShowingOperationHistory = false }
+            )
+        }
     }
 
     private func paneWidth(_ pane: MediaPane) -> CGFloat {
@@ -238,6 +246,17 @@ struct MediaBrowserView: View {
             .disabled(viewModel.selectedActionIDs.isEmpty || viewModel.isDeviceBusy)
 
             Divider().frame(height: 16)
+
+            if !viewModel.operationHistory.isEmpty || viewModel.operationHistoryWarning != nil {
+                Button {
+                    viewModel.showOperationHistory()
+                } label: {
+                    Label("Results", systemImage: "list.bullet.rectangle")
+                }
+                .buttonStyle(.borderless)
+                .help("Review saved import and delete issues")
+                .accessibilityLabel("Review saved operation results")
+            }
 
             if let progress = viewModel.operationProgress {
                 ProgressView(value: progress.fractionCompleted)
