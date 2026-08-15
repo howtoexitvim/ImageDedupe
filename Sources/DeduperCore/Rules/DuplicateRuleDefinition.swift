@@ -8,6 +8,12 @@ public struct DuplicateRuleDefinition: Equatable, Sendable {
     }
 
     public func key(for file: DeviceMediaFile) -> String? {
+        // No fields means nothing has been said about what makes two files the same, so
+        // nothing is grouped. Without this the loop below produces an empty key for *every*
+        // file, which reads as "they are all identical" — the most dangerous possible
+        // interpretation of an empty rule, and one that feeds a delete.
+        guard !fields.isEmpty else { return nil }
+
         var parts: [String] = []
 
         for field in fields {

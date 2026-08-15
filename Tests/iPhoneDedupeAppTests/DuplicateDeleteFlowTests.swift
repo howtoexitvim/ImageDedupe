@@ -9,12 +9,18 @@ import XCTest
 ///
 /// A user reported that deleted files "were still in the list" and only disappeared after
 /// deleting a second time. The device was checked and the deletes had in fact succeeded:
-/// Duplicates deliberately lists only the redundant copy of each group, so one copy of the
-/// file legitimately remains on the phone afterwards. These tests pin that behavior down so
-/// it is not mistaken for a delete failure again.
+/// deleting from Duplicates removes the redundant copy and leaves the kept one, so a copy
+/// legitimately remains on the phone afterwards. These tests pin that down so it is not
+/// mistaken for a delete failure again.
+///
+/// Duplicates now shows *every* copy of a group rather than only the redundant ones, so the
+/// user can see which copy survives and compare it. That makes the keeper reachable, and
+/// these tests also pin the guard that stops a bulk selection sweeping it up.
 @MainActor
 final class DuplicateDeleteFlowTests: XCTestCase {
-    func testDuplicatesScopeShowsOnlyTheRedundantCopyNotBothFiles() {
+    /// With no grouping supplied, the scope still falls back to listing only the redundant
+    /// copies, which keeps every existing caller working unchanged.
+    func testDuplicatesScopeWithoutGroupingListsOnlyTheRedundantCopy() {
         let keep = file(id: "keep", name: "IMG_1.HEIC")
         let redundant = file(id: "redundant", name: "IMG_1.HEIC")
         let plan = DuplicatePlan(keep: [keep], delete: [redundant])
@@ -25,6 +31,24 @@ final class DuplicateDeleteFlowTests: XCTestCase {
         )
 
         XCTAssertEqual(visible.map(\.id), ["redundant"])
+    }
+
+    /// Given the grouping, every copy is shown, ordered so a group's members are adjacent.
+    func testDuplicatesScopeWithGroupingShowsEveryCopy() {
+        let keep = file(id: "keep", name: "IMG_1.HEIC")
+        let redundant = file(id: "redundant", name: "IMG_1.HEIC")
+        let groups = DuplicateGrouping.groups(
+            files: [keep, redundant],
+            definition: DuplicateRuleSelection.default.definition
+        )
+
+        let visible = MediaReviewScope.duplicates.apply(
+            to: [keep, redundant],
+            duplicatePlan: DuplicatePlan(keep: [keep], delete: [redundant]),
+            duplicateGroups: groups
+        )
+
+        XCTAssertEqual(visible.map(\.id), ["keep", "redundant"])
     }
 
     func testDeletingTheRedundantCopyLeavesTheKeptCopyOnTheDevice() {
@@ -74,9 +98,57 @@ final class DuplicateDeleteFlowTests: XCTestCase {
 
         viewModel.applySuccessfulDeletion(itemIDs: ["second"])
 
-        // Two copies remain, so one is still redundant and stays listed.
+        // Two copies remain, so the group is still a duplicate and stays listed.
         XCTAssertEqual(viewModel.allItems.count, 2)
-        XCTAssertEqual(viewModel.visibleItems.map(\.id), ["third"])
+        // Both remaining copies are shown, not only the redundant one. Duplicates used to
+        // hide the copy the plan keeps, which made "which one survives?" unanswerable
+        // inside the app and left no way to compare a file against its twin.
+        XCTAssertEqual(viewModel.visibleItems.map(\.id), ["keep", "third"])
+        // The keeper is still identified, so the view can mark it and leave it unchecked.
+        XCTAssertEqual(viewModel.keptDuplicateIDs, ["keep"])
+    }
+
+    /// Duplicates now shows the copy that will survive alongside the redundant ones, which
+    /// creates a hazard that did not exist while it was hidden: Select All would sweep up
+    /// the keepers too, and deleting would remove *both* copies of everything.
+    ///
+    /// So Select All in Duplicates selects only the redundant copies.
+    func testSelectAllInDuplicatesNeverSelectsTheKeptCopy() {
+        let viewModel = makeViewModel()
+        let keep = item(id: "keep", name: "IMG_2.HEIC")
+        let redundant = item(id: "redundant", name: "IMG_2.HEIC")
+        viewModel.allItems = [keep, redundant]
+        viewModel.recomputeDuplicatePlanForTesting()
+        viewModel.selectReviewScope(.duplicates)
+
+        // Both copies are visible, which is the point of showing the group.
+        XCTAssertEqual(viewModel.visibleItems.map(\.id), ["keep", "redundant"])
+
+        // Select All only acts while the browser owns focus, as Command-A in the search
+        // field belongs to that text.
+        viewModel.setFocusOwner(.mediaBrowser)
+        viewModel.selectAllVisible()
+
+        XCTAssertEqual(
+            viewModel.selectedActionIDs,
+            ["redundant"],
+            "Selecting all duplicates must not mark the copy being kept for deletion."
+        )
+    }
+
+    /// The keeper can still be selected deliberately — the user may decide the other copy
+    /// is the one worth keeping. Only the bulk action refuses to do it for them.
+    func testTheKeptCopyCanStillBeSelectedDeliberately() {
+        let viewModel = makeViewModel()
+        let keep = item(id: "keep", name: "IMG_2.HEIC")
+        let redundant = item(id: "redundant", name: "IMG_2.HEIC")
+        viewModel.allItems = [keep, redundant]
+        viewModel.recomputeDuplicatePlanForTesting()
+        viewModel.selectReviewScope(.duplicates)
+
+        viewModel.toggleActionSelection(withID: "keep")
+
+        XCTAssertEqual(viewModel.selectedActionIDs, ["keep"])
     }
 
     // MARK: - Results sheet must not interrupt a clean delete

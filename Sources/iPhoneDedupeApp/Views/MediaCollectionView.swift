@@ -189,6 +189,7 @@ struct MediaCollectionView: NSViewRepresentable {
                 isBrowserFocused: isBrowserFocused,
                 isImported: viewModel.importedItemIDs.contains(item.id),
                 isDuplicateCandidate: viewModel.duplicateDeleteIDs.contains(item.id),
+                isKeptCopy: viewModel.keptDuplicateIDs.contains(item.id),
                 onToggle: { [weak self] in
                     self?.viewModel.toggleActionSelection(item)
                     self?.refreshVisibleDecoration()

@@ -69,52 +69,55 @@ final class DuplicateRuleChoiceTests: XCTestCase {
             "Different sizes are not duplicates under Name+Kind+Size."
         )
 
-        viewModel.setDuplicateRule(XCTUnwrap2(DuplicateRuleSelection(fields: [.name, .kind])))
+        viewModel.setDuplicateRule(DuplicateRuleSelection(fields: [.name, .kind]))
 
         XCTAssertEqual(viewModel.duplicatePlan.delete.map(\.id), ["2"])
     }
 
-    /// The safety floor, enforced where the user can reach it.
+    /// Every field can be unticked, including Name, and the rule can be emptied.
     ///
-    /// Unticking Name from Name+Kind+Size would leave Kind+Size, which groups every file of
-    /// the same type and byte count — the pairing that looks reasonable and is not. The
-    /// rule must stay exactly as it was.
-    func testAnUnsafeSelectionIsRefusedAndTheRuleIsUnchanged() {
+    /// The floor was removed after measuring the real catalog: Name alone marked exactly
+    /// the same single file as Name+Kind+Size. What guards the destructive step is the
+    /// delete confirmation naming the files it will remove, not a restriction on the view.
+    func testAnyFieldCanBeUntickedIncludingName() {
         let viewModel = makeViewModel()
-        let before = viewModel.duplicateRule
 
         viewModel.toggleDuplicateRuleField(.name)
+        XCTAssertFalse(viewModel.isDuplicateRuleFieldSelected(.name))
+        XCTAssertEqual(viewModel.duplicateRule.fields, [.kind, .size])
 
-        XCTAssertEqual(
-            viewModel.duplicateRule,
-            before,
-            "Removing the only content-identifying field must be refused."
-        )
-        XCTAssertFalse(
-            viewModel.canToggleDuplicateRuleField(.name),
-            "The checkbox must be disabled, so the refusal is visible before it is needed."
-        )
+        viewModel.toggleDuplicateRuleField(.kind)
+        viewModel.toggleDuplicateRuleField(.size)
+        XCTAssertTrue(viewModel.duplicateRule.fields.isEmpty)
     }
 
-    /// The floor stops a rule becoming unusable, but must not block a legitimate one:
-    /// Name+Size still identifies a file, so unticking Kind is allowed.
-    func testASafeRelaxationIsStillAllowed() {
-        let viewModel = makeViewModel()
+    /// An empty rule groups nothing rather than grouping everything, which would be the
+    /// dangerous reading of "no fields".
+    func testAnEmptyRuleGroupsNothing() {
+        let viewModel = makeViewModel(files: [
+            file(id: "1", name: "A.HEIC"),
+            file(id: "2", name: "A.HEIC")
+        ])
+        XCTAssertEqual(viewModel.duplicatePlan.delete.count, 1)
 
-        XCTAssertTrue(viewModel.canToggleDuplicateRuleField(.kind))
-        viewModel.toggleDuplicateRuleField(.kind)
+        for field in viewModel.duplicateRule.fields {
+            viewModel.toggleDuplicateRuleField(field)
+        }
 
-        XCTAssertEqual(viewModel.duplicateRule.fields, [.name, .size])
+        XCTAssertTrue(viewModel.duplicatePlan.delete.isEmpty)
     }
 
-    /// Reduced to the minimum, the last remaining fields lock so the rule cannot be emptied.
-    func testTheFinalTwoFieldsCannotBeRemoved() {
-        let viewModel = makeViewModel()
-        viewModel.toggleDuplicateRuleField(.kind)
-        XCTAssertEqual(viewModel.duplicateRule.fields, [.name, .size])
+    /// Matching on Name alone is what the user asked for, and it must be reachable in one
+    /// step from the default.
+    func testNameOnlyIsReachableAndGroupsSameNamedFiles() {
+        let viewModel = makeViewModel(files: [
+            file(id: "1", name: "A.HEIC", size: 1_000),
+            file(id: "2", name: "A.HEIC", size: 2_000)
+        ])
 
-        XCTAssertFalse(viewModel.canToggleDuplicateRuleField(.name))
-        XCTAssertFalse(viewModel.canToggleDuplicateRuleField(.size))
+        viewModel.setDuplicateRule(DuplicateRuleSelection(fields: [.name]))
+
+        XCTAssertEqual(viewModel.duplicatePlan.delete.map(\.id), ["2"])
     }
 
     func testTogglingAFieldOnAndOffReturnsTheOriginalRule() {
@@ -155,12 +158,4 @@ final class DuplicateRuleChoiceTests: XCTestCase {
             "A delete planned under the old rule must not survive the rule changing."
         )
     }
-}
-
-/// `XCTUnwrap` is throwing, which does not suit a non-throwing test body.
-private func XCTUnwrap2<T>(_ value: T?) -> T {
-    guard let value else {
-        preconditionFailure("Expected a non-nil value")
-    }
-    return value
 }

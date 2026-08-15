@@ -1,3 +1,4 @@
+import DeduperCore
 import DeviceMediaKit
 import Foundation
 
@@ -19,6 +20,32 @@ enum SessionCheck {
             for file in first.files { seen[file.model.id, default: 0] += 1 }
             let collisions = seen.filter { $0.value > 1 }
             print("duplicateModelIDs=\(collisions.count)")
+
+            // What each candidate rule would mark for deletion on the real catalog.
+            let models = first.files.map(\.model)
+            let candidates: [(String, [MediaField])] = [
+                ("Name+Kind+Size", [.name, .kind, .size]),
+                ("Name+Kind", [.name, .kind]),
+                ("Name+Size", [.name, .size]),
+                ("Name only", [.name]),
+                ("Size only", [.size]),
+                ("Date only", [.timestamp]),
+                ("Kind+Size", [.kind, .size])
+            ]
+            for (label, fields) in candidates {
+                let definition = DuplicateRuleDefinition(
+                    id: label,
+                    fields: fields.map { field in
+                        switch field {
+                        case .name: return RuleField(field: .name, normalizers: [.lowercase])
+                        case .kind: return RuleField(field: .kind, normalizers: [.uppercase])
+                        default: return RuleField(field: field)
+                        }
+                    }
+                )
+                let plan = DuplicatePlanner.plan(files: models, definition: definition)
+                print("rule=\(label) wouldDelete=\(plan.delete.count)")
+            }
             for (id, count) in collisions.prefix(10) { print("  collision id=\(id) count=\(count)") }
 
             if pauseSeconds > 0 {

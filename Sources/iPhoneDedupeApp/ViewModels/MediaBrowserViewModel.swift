@@ -96,6 +96,19 @@ final class MediaBrowserViewModel: ObservableObject {
     /// `setDuplicateRule`, which recomputes the plan and retires any pending delete.
     @Published private(set) var duplicateRule: DuplicateRuleSelection = .default
 
+    /// Every copy of each duplicate set, with the surviving one marked.
+    ///
+    /// Duplicates shows all of them, not just the redundant copies, so the user can see
+    /// which copy will survive and compare its metadata before deleting. The default action
+    /// selection is still exactly the redundant copies, so a hundred groups do not become a
+    /// hundred decisions.
+    @Published private(set) var duplicateGroups: [DuplicateGrouping.Group] = []
+
+    /// The ids of the copies each group keeps, so a renderer can mark them.
+    var keptDuplicateIDs: Set<String> {
+        Set(duplicateGroups.compactMap { $0.keptFile?.id })
+    }
+
     /// Test-only instrumentation proving Retry Verification never resubmits a delete.
     private(set) var deleteSubmissionCountForTesting = 0
 
@@ -345,7 +358,11 @@ final class MediaBrowserViewModel: ObservableObject {
     private func deriveVisibleItems(key: CatalogKey) {
         catalogDerivationCount += 1
 
-        let scopedModels = reviewScope.apply(to: allItems.map(\.model), duplicatePlan: duplicatePlan)
+        let scopedModels = reviewScope.apply(
+            to: allItems.map(\.model),
+            duplicatePlan: duplicatePlan,
+            duplicateGroups: duplicateGroups
+        )
         let scopedIDs = Set(scopedModels.map(\.id))
         let smartSearch = MediaSearchQuery(appliedSearchText)
         let searchedItems = allItems.filter { scopedIDs.contains($0.id) && smartSearch.matches($0.model) }
@@ -541,6 +558,17 @@ final class MediaBrowserViewModel: ObservableObject {
         // Deliberately does not force focus ownership. Command-A while the search field is
         // editing belongs to that text, not to the media browser.
         selection.selectAllVisible()
+
+        // Duplicates now shows the copy that will survive alongside the redundant ones, and
+        // that created a hazard which did not exist while it was hidden: Select All would
+        // sweep up the keepers too, so deleting would remove *both* copies of everything.
+        //
+        // The keepers are dropped from a bulk selection here. A deliberate click on one
+        // still selects it — the user may decide the other copy is the one worth keeping —
+        // but the app never volunteers it.
+        if reviewScope == .duplicates {
+            selection.actionSelectedIDs.subtract(keptDuplicateIDs)
+        }
     }
 
     func clearActionSelection() {
@@ -887,28 +915,30 @@ final class MediaBrowserViewModel: ObservableObject {
             files: allItems.map(\.model),
             definition: rule.definition
         )
+        duplicateGroups = DuplicateGrouping.groups(
+            files: allItems.map(\.model),
+            definition: rule.definition
+        )
         refreshVisibleOrder()
         status = "Duplicate rule: \(rule.summary). \(duplicatePlan.delete.count) redundant copies."
     }
 
-    /// Ticks or unticks one field.
-    ///
-    /// A change that would breach the safety floor — a rule that cannot identify a file, and
-    /// so would group unrelated photos before an irreversible delete — leaves the rule
-    /// untouched. The checkbox is also disabled in that case, so this is the second line of
-    /// defence rather than the first.
+    /// Ticks or unticks one field. Every combination is permitted, including none.
     func toggleDuplicateRuleField(_ field: MediaField) {
         setDuplicateRule(duplicateRule.toggling(field))
     }
 
-    /// Whether a field's checkbox can be changed without breaching the safety floor.
-    func canToggleDuplicateRuleField(_ field: MediaField) -> Bool {
-        duplicateRule.canToggle(field)
+    func isDuplicateRuleFieldSelected(_ field: MediaField) -> Bool {
+        duplicateRule.fields.contains(field)
     }
 
     /// Recomputes the plan from the current rule, for tests that set `allItems` directly.
     func recomputeDuplicatePlanForTesting() {
         duplicatePlan = DuplicatePlanner.plan(
+            files: allItems.map(\.model),
+            definition: duplicateRule.definition
+        )
+        duplicateGroups = DuplicateGrouping.groups(
             files: allItems.map(\.model),
             definition: duplicateRule.definition
         )
@@ -1108,6 +1138,10 @@ final class MediaBrowserViewModel: ObservableObject {
         deviceIdentityHash = payload.deviceIdentityHash
         allItems = payload.items
         duplicatePlan = payload.plan
+        duplicateGroups = DuplicateGrouping.groups(
+            files: payload.items.map(\.model),
+            definition: duplicateRule.definition
+        )
         selection = MediaSelectionState()
         // The previous session's outstanding requests are meaningless now.
         thumbnailRequests.cancelAll()
@@ -1643,6 +1677,10 @@ final class MediaBrowserViewModel: ObservableObject {
             importedFileURLsByItemID.removeValue(forKey: itemID)
         }
         duplicatePlan = DuplicatePlanner.plan(
+            files: allItems.map(\.model),
+            definition: duplicateRule.definition
+        )
+        duplicateGroups = DuplicateGrouping.groups(
             files: allItems.map(\.model),
             definition: duplicateRule.definition
         )

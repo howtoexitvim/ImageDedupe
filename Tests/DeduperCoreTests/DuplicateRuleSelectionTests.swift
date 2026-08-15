@@ -2,9 +2,10 @@ import XCTest
 
 @testable import DeduperCore
 
-/// The user chooses which fields decide that two files are duplicates. This is the model
-/// behind that choice, and it carries a safety floor: the rule drives an irreversible
-/// delete, so a selection that would group unrelated files must not be expressible.
+/// The user chooses which fields decide that two files are duplicates. Every combination is
+/// permitted — a single field, or none — because a rule only changes what Duplicates shows.
+/// The delete confirmation, which names the exact files it will remove, is what guards the
+/// destructive step.
 final class DuplicateRuleSelectionTests: XCTestCase {
     private func file(
         id: String,
@@ -26,31 +27,55 @@ final class DuplicateRuleSelectionTests: XCTestCase {
         )
     }
 
-    // MARK: - The safety floor
+    // MARK: - Every combination is permitted
 
-    /// Name alone, size alone, or date alone will each group unrelated files: an iPhone
-    /// reuses names like IMG_0001.HEIC after a reset, thousands of files share a size, and
-    /// a burst shares a timestamp. Since the rule drives a delete, at least two fields must
-    /// participate, and one of them must actually identify content.
-    func testASingleFieldIsNotAValidRule() {
-        XCTAssertNil(DuplicateRuleSelection(fields: [.name]))
-        XCTAssertNil(DuplicateRuleSelection(fields: [.size]))
-        XCTAssertNil(DuplicateRuleSelection(fields: [.timestamp]))
+    /// The floor was removed at the user's direction, after measuring what the rules
+    /// actually do to their catalog: on 3,955 files, Name alone marked exactly the same
+    /// single file as Name+Kind+Size, so the name-collision risk that justified the floor
+    /// did not exist in practice.
+    ///
+    /// A rule only changes what Duplicates *shows*. The delete confirmation, which names
+    /// the exact files it will remove, is what guards the destructive step — and it is
+    /// unchanged.
+    func testASingleFieldIsAValidRule() {
+        XCTAssertEqual(DuplicateRuleSelection(fields: [.name]).fields, [.name])
+        XCTAssertEqual(DuplicateRuleSelection(fields: [.size]).fields, [.size])
+        XCTAssertEqual(DuplicateRuleSelection(fields: [.timestamp]).fields, [.timestamp])
     }
 
-    func testAnEmptySelectionIsNotAValidRule() {
-        XCTAssertNil(DuplicateRuleSelection(fields: []))
+    /// Selecting nothing is legal and simply groups nothing, rather than being rejected or
+    /// silently reset.
+    func testAnEmptySelectionGroupsNothing() {
+        let selection = DuplicateRuleSelection(fields: [])
+        XCTAssertTrue(selection.fields.isEmpty)
+
+        let plan = DuplicatePlanner.plan(
+            files: [
+                file(id: "1", name: "A.HEIC"),
+                file(id: "2", name: "A.HEIC")
+            ],
+            definition: selection.definition
+        )
+        XCTAssertTrue(plan.delete.isEmpty, "No fields means nothing is a duplicate.")
     }
 
-    /// Kind plus size is the pairing that looks reasonable and is not: every 4 MB HEIC on
-    /// the device would become one duplicate group.
-    func testKindAndSizeAloneIsRefused() {
-        XCTAssertNil(DuplicateRuleSelection(fields: [.kind, .size]))
+    /// An empty rule must survive a round trip rather than being mistaken for "nothing
+    /// stored" and reset to the default on the next launch.
+    func testAnEmptySelectionSurvivesARoundTrip() {
+        let empty = DuplicateRuleSelection(fields: [])
+        XCTAssertTrue(DuplicateRuleSelection(storedValue: empty.storedValue).fields.isEmpty)
+    }
+
+    func testEveryFieldCanBeUntickedIncludingName() {
+        var selection = DuplicateRuleSelection.default
+        for field in selection.fields {
+            selection = selection.toggling(field)
+        }
+        XCTAssertTrue(selection.fields.isEmpty)
     }
 
     func testTheDefaultRuleIsTheConservativeOne() {
-        let selection = DuplicateRuleSelection.default
-        XCTAssertEqual(selection.fields, [.name, .kind, .size])
+        XCTAssertEqual(DuplicateRuleSelection.default.fields, [.name, .kind, .size])
     }
 
     // MARK: - Matching
@@ -72,8 +97,8 @@ final class DuplicateRuleSelectionTests: XCTestCase {
 
     /// Relaxing the rule to name and kind finds a same-named file whose size changed, which
     /// is what the user asked for — a genuine duplicate that the strict rule misses.
-    func testDroppingSizeFindsSameNamedFilesOfDifferentSize() throws {
-        let selection = try XCTUnwrap(DuplicateRuleSelection(fields: [.name, .kind]))
+    func testDroppingSizeFindsSameNamedFilesOfDifferentSize() {
+        let selection = DuplicateRuleSelection(fields: [.name, .kind])
         let plan = DuplicatePlanner.plan(
             files: [
                 file(id: "1", name: "IMG_0001.HEIC", size: 1_000),
@@ -100,8 +125,8 @@ final class DuplicateRuleSelectionTests: XCTestCase {
 
     /// A file missing a field the rule needs is never grouped, so an absent timestamp
     /// cannot silently match another absent timestamp.
-    func testFilesMissingARequiredFieldAreNeverGrouped() throws {
-        let selection = try XCTUnwrap(DuplicateRuleSelection(fields: [.name, .timestamp]))
+    func testFilesMissingARequiredFieldAreNeverGrouped() {
+        let selection = DuplicateRuleSelection(fields: [.name, .timestamp])
         let plan = DuplicatePlanner.plan(
             files: [
                 file(id: "1", name: "IMG_0001.HEIC", timestamp: nil),
@@ -113,8 +138,8 @@ final class DuplicateRuleSelectionTests: XCTestCase {
         XCTAssertTrue(plan.delete.isEmpty, "Absent values must not match each other.")
     }
 
-    func testDurationParticipatesWhenSelected() throws {
-        let selection = try XCTUnwrap(DuplicateRuleSelection(fields: [.name, .duration]))
+    func testDurationParticipatesWhenSelected() {
+        let selection = DuplicateRuleSelection(fields: [.name, .duration])
         let plan = DuplicatePlanner.plan(
             files: [
                 file(id: "1", name: "CLIP.MOV", kind: "MOV", duration: 12.5),
@@ -129,17 +154,17 @@ final class DuplicateRuleSelectionTests: XCTestCase {
 
     /// Field order must not change the outcome, so ticking boxes in a different order
     /// cannot produce a different rule.
-    func testFieldOrderDoesNotChangeTheRule() throws {
-        let one = try XCTUnwrap(DuplicateRuleSelection(fields: [.name, .kind, .size]))
-        let other = try XCTUnwrap(DuplicateRuleSelection(fields: [.size, .name, .kind]))
+    func testFieldOrderDoesNotChangeTheRule() {
+        let one = DuplicateRuleSelection(fields: [.name, .kind, .size])
+        let other = DuplicateRuleSelection(fields: [.size, .name, .kind])
         XCTAssertEqual(one.fields, other.fields)
         XCTAssertEqual(one.definition, other.definition)
     }
 
     // MARK: - Persistence
 
-    func testASelectionSurvivesARoundTripThroughItsStoredForm() throws {
-        let selection = try XCTUnwrap(DuplicateRuleSelection(fields: [.name, .kind, .timestamp]))
+    func testASelectionSurvivesARoundTripThroughItsStoredForm() {
+        let selection = DuplicateRuleSelection(fields: [.name, .kind, .timestamp])
         let restored = DuplicateRuleSelection(storedValue: selection.storedValue)
         XCTAssertEqual(restored, selection)
     }
@@ -149,6 +174,7 @@ final class DuplicateRuleSelectionTests: XCTestCase {
     func testAnUnreadableStoredValueFallsBackToTheDefault() {
         XCTAssertEqual(DuplicateRuleSelection(storedValue: "nonsense"), .default)
         XCTAssertEqual(DuplicateRuleSelection(storedValue: ""), .default)
-        XCTAssertEqual(DuplicateRuleSelection(storedValue: "size"), .default)
+        // A legible single field is honoured rather than overridden.
+        XCTAssertEqual(DuplicateRuleSelection(storedValue: "size").fields, [.size])
     }
 }
