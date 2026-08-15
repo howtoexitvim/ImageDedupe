@@ -504,6 +504,37 @@ final class MediaSelectionStateTests: XCTestCase {
 
     // MARK: - Marquee selection
 
+    func testMarqueeStartingOnAnUnselectedItemSelectsIntersectingItems() {
+        var state = state()
+        state.actionSelectedIDs = ["e"]
+
+        state.beginMarqueeSelection(startingAt: "b")
+        state.updateMarqueeSelection(intersecting: ["b", "c"])
+
+        XCTAssertEqual(state.actionSelectedIDs, ["b", "c", "e"])
+    }
+
+    func testMarqueeStartingOnASelectedItemDeselectsWithoutFillingHoles() {
+        var state = state()
+        state.actionSelectedIDs = ["a", "b", "d"]
+
+        state.beginMarqueeSelection(startingAt: "b")
+        state.updateMarqueeSelection(intersecting: ["b", "c", "d"])
+
+        XCTAssertEqual(state.actionSelectedIDs, ["a"])
+    }
+
+    func testMarqueeStartingOutsideTheVisibleOrderDoesNothing() {
+        var state = state()
+        state.actionSelectedIDs = ["a"]
+
+        state.beginMarqueeSelection(startingAt: "missing")
+        state.updateMarqueeSelection(intersecting: ["a", "b"])
+
+        XCTAssertEqual(state.actionSelectedIDs, ["a"])
+        XCTAssertFalse(state.isDragSelecting)
+    }
+
     func testMarqueeSelectsIntersectingItems() {
         var state = state()
         state.beginMarqueeSelection(additive: false)

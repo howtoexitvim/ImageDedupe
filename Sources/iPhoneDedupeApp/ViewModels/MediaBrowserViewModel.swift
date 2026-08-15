@@ -354,6 +354,12 @@ final class MediaBrowserViewModel: ObservableObject {
         selection.beginMarqueeSelection(additive: additive, deselecting: deselecting)
     }
 
+    /// Starts a Grid marquee from a tile, mirroring List's start-item select/deselect rule.
+    func beginMarqueeSelection(startingAt id: String) {
+        refreshVisibleOrder()
+        selection.beginMarqueeSelection(startingAt: id)
+    }
+
     func updateMarqueeSelection(intersecting ids: Set<String>) {
         selection.updateMarqueeSelection(intersecting: ids)
     }
