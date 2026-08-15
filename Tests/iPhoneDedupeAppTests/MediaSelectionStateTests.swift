@@ -523,13 +523,28 @@ final class MediaSelectionStateTests: XCTestCase {
         XCTAssertEqual(state.actionSelectedIDs, ["b"])
     }
 
-    func testPlainMarqueeReplacesTheExistingSelection() {
+    /// Regression: a second marquee used to clear whatever the first had selected, so the
+    /// Grid and the List disagreed about the same gesture. Both are additive now.
+    func testASecondMarqueeKeepsTheFirstSelection() {
+        var state = state()
+        state.beginMarqueeSelection()
+        state.updateMarqueeSelection(intersecting: ["a", "b"])
+        state.endDragSelection()
+
+        state.beginMarqueeSelection()
+        state.updateMarqueeSelection(intersecting: ["d", "e"])
+        state.endDragSelection()
+
+        XCTAssertEqual(state.actionSelectedIDs, ["a", "b", "d", "e"])
+    }
+
+    func testMarqueeAddsToASelectionMadeByOtherMeans() {
         var state = state()
         state.toggleActionSelection("e")
-        state.beginMarqueeSelection(additive: false)
+        state.beginMarqueeSelection()
         state.updateMarqueeSelection(intersecting: ["a"])
 
-        XCTAssertEqual(state.actionSelectedIDs, ["a"])
+        XCTAssertEqual(state.actionSelectedIDs, ["a", "e"])
     }
 
     func testAdditiveMarqueeKeepsTheExistingSelection() {

@@ -240,17 +240,18 @@ struct MediaSelectionState: Equatable {
 
     /// Starts a marquee drag from blank canvas, where there is no origin item.
     ///
-    /// Additive drags (Command or Shift held) keep the existing selection as their base;
-    /// a plain drag replaces it, matching Finder.
-    mutating func beginMarqueeSelection(additive: Bool, deselecting: Bool = false) {
+    /// The marquee **adds** to the existing selection, matching the List's row drag. An
+    /// earlier version cleared first, so a second marquee silently discarded everything the
+    /// first one had selected — the List and the Grid disagreed about the same gesture.
+    ///
+    /// Checkbox, Escape, and Command-A remain the ways to clear or replace a selection
+    /// wholesale, so nothing is lost by making the drag purely additive.
+    mutating func beginMarqueeSelection(additive: Bool = true, deselecting: Bool = false) {
         focusOwner = .mediaBrowser
         isDragDeselecting = deselecting
-        dragBaseSelection = (additive || deselecting) ? actionSelectedIDs : []
+        dragBaseSelection = actionSelectedIDs
         dragOriginID = nil
         isMarqueeSelecting = true
-        if !additive && !deselecting {
-            actionSelectedIDs.removeAll()
-        }
         endExtension()
     }
 

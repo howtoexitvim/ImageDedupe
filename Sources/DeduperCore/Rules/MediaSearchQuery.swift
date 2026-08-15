@@ -20,6 +20,19 @@ private enum Token: Equatable, Sendable {
     case size(Comparison<Int64>)
     case duration(Comparison<Double>)
 
+    /// Parses one whitespace-separated term.
+    ///
+    /// Every searchable field has an explicit prefix: `name:`, `kind:`, `size:`,
+    /// `duration:`. A term with no recognised prefix searches the **name**, which is what
+    /// users mean by far most often.
+    ///
+    /// The alternative — matching an unprefixed term against a blob of every field — was
+    /// removed after `1.2` returned videos with no visible relationship to the query: their
+    /// durations stringified as `111.25`, which contains that substring. Free-text matching
+    /// over numbers produces results the user cannot explain.
+    ///
+    /// A term whose prefix is not one of the four is treated as a name search too, so
+    /// filenames containing a colon still work.
     init?(rawValue: String) {
         let trimmed = rawValue.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else {
@@ -53,7 +66,8 @@ private enum Token: Equatable, Sendable {
     func matches(_ file: DeviceMediaFile) -> Bool {
         switch self {
         case .plain(let value):
-            return searchableText(for: file).localizedCaseInsensitiveContains(value)
+            // An unprefixed term means the name. See `Token.init`.
+            return file.name.localizedCaseInsensitiveContains(value)
         case .field(.name, let value):
             return file.name.localizedCaseInsensitiveContains(value)
         case .field(.kind, let value):
@@ -70,19 +84,6 @@ private enum Token: Equatable, Sendable {
         }
     }
 
-    private func searchableText(for file: DeviceMediaFile) -> String {
-        [
-            file.name,
-            file.kind,
-            file.timestamp,
-            file.location,
-            file.width.map(String.init),
-            file.height.map(String.init),
-            file.duration.map { String($0) },
-        ]
-        .compactMap { $0 }
-        .joined(separator: " ")
-    }
 }
 
 private enum Field: String, Equatable, Sendable {

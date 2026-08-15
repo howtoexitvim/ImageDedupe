@@ -146,6 +146,166 @@ final class SearchAuditTests: XCTestCase {
         XCTAssertTrue(viewModel.visibleItems.isEmpty)
     }
 
+    // MARK: - Plain queries must not match raw numeric fields
+
+    /// Reported 2026-08-15: searching `1.2` returned videos with no visible relationship to
+    /// the query. Their durations stringified as e.g. `111.25`, which contains "1.2".
+    func testPlainQueryDoesNotMatchRawDurationSeconds() {
+        let viewModel = MediaBrowserViewModel()
+        viewModel.allItems = [
+            MediaBrowserViewModel.MediaItem(
+                model: DeviceMediaFile(
+                    id: "id-0", name: "SJJS7164.MOV", kind: "mov",
+                    size: 181_000_000, timestamp: "2025-03-01T10:00:00Z",
+                    width: 1_920, height: 1_080, duration: 111.25
+                ),
+                cameraFile: ICCameraFile()
+            )
+        ]
+        viewModel.refreshVisibleOrder()
+
+        viewModel.searchText = "1.2"
+        viewModel.flushPendingSearch()
+
+        XCTAssertTrue(viewModel.visibleItems.isEmpty, "111.25 seconds must not match \"1.2\"")
+    }
+
+    func testPlainQueryDoesNotMatchRawPixelDimensions() {
+        let viewModel = MediaBrowserViewModel()
+        viewModel.allItems = [
+            MediaBrowserViewModel.MediaItem(
+                model: DeviceMediaFile(
+                    id: "id-0", name: "PHOTO.HEIC", kind: "heic",
+                    size: 100, timestamp: nil, width: 1_920, height: 1_080
+                ),
+                cameraFile: ICCameraFile()
+            )
+        ]
+        viewModel.refreshVisibleOrder()
+
+        viewModel.searchText = "1920"
+        viewModel.flushPendingSearch()
+
+        XCTAssertTrue(viewModel.visibleItems.isEmpty, "dimensions are searched via tokens, not free text")
+    }
+
+    /// Numbers stay reachable through the explicit tokens, where intent is unambiguous.
+    func testDurationTokenStillMatchesNumerically() {
+        let viewModel = MediaBrowserViewModel()
+        viewModel.allItems = [
+            MediaBrowserViewModel.MediaItem(
+                model: DeviceMediaFile(
+                    id: "short", name: "A.MOV", kind: "mov", size: 10,
+                    timestamp: nil, width: nil, height: nil, duration: 5
+                ),
+                cameraFile: ICCameraFile()
+            ),
+            MediaBrowserViewModel.MediaItem(
+                model: DeviceMediaFile(
+                    id: "long", name: "B.MOV", kind: "mov", size: 10,
+                    timestamp: nil, width: nil, height: nil, duration: 300
+                ),
+                cameraFile: ICCameraFile()
+            )
+        ]
+        viewModel.refreshVisibleOrder()
+
+        viewModel.searchText = "duration:<10s"
+        viewModel.flushPendingSearch()
+
+        XCTAssertEqual(viewModel.visibleItems.map(\.id), ["short"])
+    }
+
+    func testNameSearchStillWorksForNumbersInsideNames() {
+        let viewModel = viewModel(names: ["IMG_1234.HEIC", "OTHER.HEIC"])
+        viewModel.searchText = "1234"
+        viewModel.flushPendingSearch()
+
+        XCTAssertEqual(viewModel.visibleItems.count, 1, "digits in the filename must still match")
+    }
+
+    // MARK: - Unprefixed terms search the name
+
+    func testUnprefixedTermSearchesTheName() {
+        let viewModel = viewModel(names: ["IMG_0001.HEIC", "OTHER.MOV"])
+        viewModel.searchText = "IMG"
+        viewModel.flushPendingSearch()
+
+        XCTAssertEqual(viewModel.visibleItems.map(\.model.name), ["IMG_0001.HEIC"])
+    }
+
+    /// A bare `mov` must not match every `.MOV` file by kind; it searches the name only.
+    /// Users who want the kind write `kind:mov`.
+    func testUnprefixedTermDoesNotSearchKind() {
+        let viewModel = MediaBrowserViewModel()
+        viewModel.allItems = [
+            MediaBrowserViewModel.MediaItem(
+                model: DeviceMediaFile(
+                    id: "id-0", name: "CLIP.QT", kind: "mov",
+                    size: 10, timestamp: nil, width: nil, height: nil
+                ),
+                cameraFile: ICCameraFile()
+            )
+        ]
+        viewModel.refreshVisibleOrder()
+
+        viewModel.searchText = "mov"
+        viewModel.flushPendingSearch()
+        XCTAssertTrue(viewModel.visibleItems.isEmpty, "bare text searches the name, not the kind")
+
+        viewModel.searchText = "kind:mov"
+        viewModel.flushPendingSearch()
+        XCTAssertEqual(viewModel.visibleItems.count, 1, "the explicit prefix still works")
+    }
+
+    func testNamePrefixIsEquivalentToAnUnprefixedTerm() {
+        let viewModel = viewModel(names: ["IMG_0001.HEIC", "OTHER.MOV"])
+
+        viewModel.searchText = "name:IMG"
+        viewModel.flushPendingSearch()
+        let prefixed = viewModel.visibleItems.map(\.id)
+
+        viewModel.searchText = "IMG"
+        viewModel.flushPendingSearch()
+
+        XCTAssertEqual(viewModel.visibleItems.map(\.id), prefixed)
+    }
+
+    /// A filename containing a colon must not be mistaken for an unknown prefix.
+    func testTermWithAnUnknownPrefixSearchesTheName() {
+        let viewModel = viewModel(names: ["a:b.HEIC", "OTHER.MOV"])
+        viewModel.searchText = "a:b"
+        viewModel.flushPendingSearch()
+
+        XCTAssertEqual(viewModel.visibleItems.count, 1)
+    }
+
+    func testMultipleTermsMustAllMatch() {
+        let viewModel = MediaBrowserViewModel()
+        viewModel.allItems = [
+            MediaBrowserViewModel.MediaItem(
+                model: DeviceMediaFile(
+                    id: "match", name: "IMG_0001.MOV", kind: "mov",
+                    size: 10, timestamp: nil, width: nil, height: nil
+                ),
+                cameraFile: ICCameraFile()
+            ),
+            MediaBrowserViewModel.MediaItem(
+                model: DeviceMediaFile(
+                    id: "wrong-kind", name: "IMG_0002.HEIC", kind: "heic",
+                    size: 10, timestamp: nil, width: nil, height: nil
+                ),
+                cameraFile: ICCameraFile()
+            )
+        ]
+        viewModel.refreshVisibleOrder()
+
+        viewModel.searchText = "IMG kind:mov"
+        viewModel.flushPendingSearch()
+
+        XCTAssertEqual(viewModel.visibleItems.map(\.id), ["match"])
+    }
+
     // MARK: - Unicode and case
 
     func testSearchIsCaseInsensitive() {
