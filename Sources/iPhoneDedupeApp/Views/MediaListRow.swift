@@ -32,9 +32,22 @@ enum MediaListRow: Equatable {
     }
 
     /// Flattens duplicate groups into header-then-members order.
-    static func rows(forGroups groups: [DuplicateGrouping.Group]) -> [MediaListRow] {
-        groups.flatMap { group in
-            [.header(group.title, groupID: group.id)] + group.members.map { .item($0.file.id) }
+    ///
+    /// - Parameter visibleItemIDs: the items surviving the current search, or `nil` to keep
+    ///   every member. A group with no surviving member contributes **nothing**, header
+    ///   included: a header labels the rows beneath it, so leaving one above an empty space
+    ///   claims copies that are not on screen. That was the bug reported on 2026-08-16,
+    ///   where a search matching no files still listed every group heading.
+    static func rows(
+        forGroups groups: [DuplicateGrouping.Group],
+        visibleItemIDs: Set<String>? = nil
+    ) -> [MediaListRow] {
+        groups.flatMap { group -> [MediaListRow] in
+            let members = group.members.filter { member in
+                visibleItemIDs?.contains(member.file.id) ?? true
+            }
+            guard !members.isEmpty else { return [] }
+            return [.header(group.title, groupID: group.id)] + members.map { .item($0.file.id) }
         }
     }
 

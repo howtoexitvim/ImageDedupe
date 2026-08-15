@@ -212,9 +212,12 @@ struct MediaTableView: NSViewRepresentable {
             self.items = items
             // Headers only in Duplicates; All Media keeps a plain one-row-per-item list.
             if viewModel.reviewScope == .duplicates, !viewModel.duplicateGroups.isEmpty {
-                let visible = Set(items.map(\.id))
-                self.rows = MediaListRow.rows(forGroups: viewModel.duplicateGroups)
-                    .filter { row in row.isHeader || visible.contains(row.itemID ?? "") }
+                // The visible set is what survives the search; a group with nothing left
+                // drops its header too, rather than heading an empty space.
+                self.rows = MediaListRow.rows(
+                    forGroups: viewModel.duplicateGroups,
+                    visibleItemIDs: Set(items.map(\.id))
+                )
             } else {
                 self.rows = items.map { .item($0.id) }
             }

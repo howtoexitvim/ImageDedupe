@@ -270,6 +270,41 @@ final class DuplicateDeleteFlowTests: XCTestCase {
         XCTAssertEqual(viewModel.duplicateDeleteIDs, ["a2", "a3"])
     }
 
+    /// Searching in Duplicates must filter the files themselves, not just their headers.
+    /// The grouped view builds its own order, so the search has to be applied to it rather
+    /// than bypassed.
+    func testSearchingInDuplicatesFiltersTheFiles() {
+        let viewModel = makeViewModel()
+        viewModel.allItems = [
+            item(id: "a1", name: "APPLE.HEIC"),
+            item(id: "a2", name: "APPLE.HEIC"),
+            item(id: "b1", name: "BANANA.HEIC"),
+            item(id: "b2", name: "BANANA.HEIC")
+        ]
+        viewModel.recomputeDuplicatePlanForTesting()
+        viewModel.selectReviewScope(.duplicates)
+        XCTAssertEqual(viewModel.visibleItems.count, 4)
+
+        viewModel.applySearchText("BANANA")
+
+        XCTAssertEqual(viewModel.visibleItems.map(\.id), ["b1", "b2"])
+    }
+
+    /// A search matching nothing empties the view completely.
+    func testASearchMatchingNothingEmptiesDuplicates() {
+        let viewModel = makeViewModel()
+        viewModel.allItems = [
+            item(id: "a1", name: "APPLE.HEIC"),
+            item(id: "a2", name: "APPLE.HEIC")
+        ]
+        viewModel.recomputeDuplicatePlanForTesting()
+        viewModel.selectReviewScope(.duplicates)
+
+        viewModel.applySearchText("zzzz-no-match")
+
+        XCTAssertTrue(viewModel.visibleItems.isEmpty)
+    }
+
     // MARK: - Results sheet must not interrupt a clean delete
 
     func testCleanDeleteDoesNotAutoPresentTheResultsSheet() async {

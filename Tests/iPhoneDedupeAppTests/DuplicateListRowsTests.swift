@@ -164,4 +164,51 @@ final class DuplicateListRowsTests: XCTestCase {
         let rows: [MediaListRow] = [.item("x"), .item("y")]
         XCTAssertEqual(MediaListRow.scrollTargetRow(forItemID: "y", in: rows), 1)
     }
+
+    /// Searching in Duplicates filters the files, and a group whose files all disappear
+    /// must take its header with it.
+    ///
+    /// Reported on 2026-08-16: typing a query that matched nothing left the headers behind,
+    /// so the list read "WDAW8576.JPG — 2 copies" above no rows at all. A header is a label
+    /// for the rows beneath it; with none left it is a lie about what is on screen.
+    func testAGroupWhoseMembersAreAllFilteredOutLosesItsHeader() {
+        let allGroups = groups([
+            file(id: "a1", name: "A.HEIC"),
+            file(id: "a2", name: "A.HEIC"),
+            file(id: "b1", name: "B.HEIC"),
+            file(id: "b2", name: "B.HEIC")
+        ])
+
+        // Only B's copies survive the search.
+        let rows = MediaListRow.rows(forGroups: allGroups, visibleItemIDs: ["b1", "b2"])
+
+        XCTAssertEqual(rows.count, 3, "One header and its two surviving copies.")
+        guard case let .header(title, _) = rows[0] else { return XCTFail("Expected a header") }
+        XCTAssertEqual(title, "B.HEIC — 2 copies")
+        XCTAssertEqual(rows.compactMap(\.itemID), ["b1", "b2"])
+    }
+
+    /// A partly-filtered group keeps its header: some of its copies are still shown.
+    func testAPartlyFilteredGroupKeepsItsHeader() {
+        let allGroups = groups([
+            file(id: "a1", name: "A.HEIC"),
+            file(id: "a2", name: "A.HEIC")
+        ])
+
+        let rows = MediaListRow.rows(forGroups: allGroups, visibleItemIDs: ["a2"])
+
+        XCTAssertEqual(rows.count, 2)
+        XCTAssertTrue(rows[0].isHeader)
+        XCTAssertEqual(rows.compactMap(\.itemID), ["a2"])
+    }
+
+    /// A search matching nothing leaves an empty list, not a list of bare headers.
+    func testFilteringEverythingOutLeavesNoRows() {
+        let allGroups = groups([
+            file(id: "a1", name: "A.HEIC"),
+            file(id: "a2", name: "A.HEIC")
+        ])
+
+        XCTAssertTrue(MediaListRow.rows(forGroups: allGroups, visibleItemIDs: []).isEmpty)
+    }
 }
