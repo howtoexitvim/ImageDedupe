@@ -89,6 +89,7 @@ struct MediaBrowserView: View {
             OperationHistoryView(
                 records: viewModel.operationHistory,
                 warning: viewModel.operationHistoryWarning,
+                onRetryVerification: { viewModel.retryDeleteVerification(recordID: $0) },
                 onClear: { viewModel.clearOperationHistory() },
                 onDone: { viewModel.isShowingOperationHistory = false }
             )
@@ -310,16 +311,18 @@ struct MediaBrowserView: View {
         .padding(.vertical, 6)
         .accessibilityElement(children: .contain)
         .confirmationDialog(
-            "Delete \(viewModel.selectedActionIDs.count) item(s) from this iPhone?",
+            "Delete \(viewModel.pendingDeleteSnapshot?.items.count ?? 0) item(s) from this iPhone?",
             isPresented: $viewModel.isConfirmingDelete,
             titleVisibility: .visible
         ) {
             Button("Delete From Device", role: .destructive) {
                 viewModel.deleteSelected()
             }
-            Button("Cancel", role: .cancel) {}
+            Button("Cancel", role: .cancel) {
+                viewModel.cancelDeleteConfirmation()
+            }
         } message: {
-            Text("This uses ImageCaptureCore device deletion and cannot be undone by this app.")
+            Text("\(ByteCountFormatter.string(fromByteCount: viewModel.pendingDeleteSnapshot?.totalBytes ?? 0, countStyle: .file)) will be submitted to ImageCaptureCore device deletion and cannot be undone by this app.")
         }
     }
 

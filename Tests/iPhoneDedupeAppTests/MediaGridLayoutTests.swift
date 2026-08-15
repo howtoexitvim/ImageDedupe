@@ -155,7 +155,7 @@ final class MediaGridInteractionTests: XCTestCase {
                 width: nil,
                 height: nil
             ),
-            cameraFile: ICCameraFile()
+            token: .fixture()
         )
     }
 

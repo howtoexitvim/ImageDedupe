@@ -22,7 +22,7 @@ final class OperationGateTests: XCTestCase {
                 width: nil,
                 height: nil
             ),
-            cameraFile: ICCameraFile()
+            token: .fixture()
         )
     }
 
@@ -78,6 +78,20 @@ final class OperationGateTests: XCTestCase {
         XCTAssertTrue(viewModel.isConfirmingDelete)
         XCTAssertFalse(viewModel.isDeviceBusy, "asking for confirmation must not start a delete")
         XCTAssertEqual(viewModel.allItems.count, 3)
+    }
+
+    func testDeleteConfirmationFreezesSelectionCountNamesAndBytes() throws {
+        let viewModel = viewModel()
+        viewModel.toggleActionSelection(item("a"))
+        viewModel.requestDeleteConfirmation()
+        let frozen = try XCTUnwrap(viewModel.pendingDeleteSnapshot)
+
+        viewModel.toggleActionSelection(item("b"))
+
+        XCTAssertEqual(frozen.items.map(\.filename), ["a.heic"])
+        XCTAssertEqual(frozen.items.count, 1)
+        XCTAssertEqual(frozen.totalBytes, 1_000)
+        XCTAssertEqual(viewModel.pendingDeleteSnapshot, frozen)
     }
 
     // MARK: - Mutual exclusion

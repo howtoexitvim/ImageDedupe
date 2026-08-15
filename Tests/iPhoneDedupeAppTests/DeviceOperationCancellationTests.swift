@@ -2,6 +2,7 @@ import DeviceMediaKit
 import Foundation
 import XCTest
 
+@MainActor
 final class DeviceOperationCancellationTests: XCTestCase {
     func testCancelIsIdempotent() {
         let cancellation = DeviceOperationCancellation()

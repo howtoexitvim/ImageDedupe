@@ -21,7 +21,7 @@ final class MediaTableViewTests: XCTestCase {
                 width: nil,
                 height: nil
             ),
-            cameraFile: ICCameraFile()
+            token: .fixture()
         )
     }
 

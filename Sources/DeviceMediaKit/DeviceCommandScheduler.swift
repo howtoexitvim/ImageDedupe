@@ -6,8 +6,18 @@ public actor DeviceCommandScheduler {
         case low
     }
 
-    public enum AcquireError: Error, Equatable, Sendable {
+    public enum AcquireError: Error, Equatable, LocalizedError, Sendable {
         case generationCanceled
+        case invalidated
+
+        public var errorDescription: String? {
+            switch self {
+            case .generationCanceled:
+                "This request belongs to an older device scan."
+            case .invalidated:
+                "The device gateway stopped after an unacknowledged operation. Reopen the app before retrying."
+            }
+        }
     }
 
     public struct Lease: Equatable, Sendable {
@@ -30,6 +40,7 @@ public actor DeviceCommandScheduler {
     private var highPriorityWaiters: [Waiter] = []
     private var lowPriorityWaiters: [Waiter] = []
     private var canceledGenerations: Set<UUID> = []
+    private var isInvalidated = false
 
     private(set) var activeLease: Lease?
 
@@ -40,6 +51,9 @@ public actor DeviceCommandScheduler {
     public init() {}
 
     public func acquire(priority: Priority, generation: UUID?) async throws -> Lease {
+        if isInvalidated {
+            throw AcquireError.invalidated
+        }
         if let generation, canceledGenerations.contains(generation) {
             throw AcquireError.generationCanceled
         }
@@ -75,6 +89,13 @@ public actor DeviceCommandScheduler {
         canceledGenerations.insert(generation)
         rejectWaiters(in: &highPriorityWaiters, generation: generation)
         rejectWaiters(in: &lowPriorityWaiters, generation: generation)
+    }
+
+    public func invalidate() {
+        guard !isInvalidated else { return }
+        isInvalidated = true
+        rejectAllWaiters(in: &highPriorityWaiters)
+        rejectAllWaiters(in: &lowPriorityWaiters)
     }
 
     private func startNextCommand() {
@@ -117,5 +138,12 @@ public actor DeviceCommandScheduler {
             }
         }
         waiters = retained
+    }
+
+    private func rejectAllWaiters(in waiters: inout [Waiter]) {
+        for waiter in waiters {
+            waiter.continuation.resume(returning: .failure(.invalidated))
+        }
+        waiters.removeAll()
     }
 }

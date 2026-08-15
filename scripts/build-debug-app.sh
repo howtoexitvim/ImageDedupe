@@ -12,6 +12,7 @@ contents_path="$app_path/Contents"
 mkdir -p "$contents_path/MacOS" "$contents_path/Resources"
 cp "$bin_path/iPhoneDedupeApp" "$contents_path/MacOS/iPhoneDedupeApp"
 cp "$repo_root/Packaging/Info.plist" "$contents_path/Info.plist"
-codesign --force --sign - "$app_path"
+cp "$repo_root/Packaging/PrivacyInfo.xcprivacy" "$contents_path/Resources/PrivacyInfo.xcprivacy"
+codesign --force --options runtime --sign - "$app_path"
 
 print -r -- "$app_path"

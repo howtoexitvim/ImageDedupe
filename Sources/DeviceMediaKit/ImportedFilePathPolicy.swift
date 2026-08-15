@@ -57,6 +57,17 @@ public struct ImportDestinationIdentity: Equatable, Sendable {
             throw ImportedFilePathError.destinationChanged
         }
     }
+
+    func validate(fileDescriptor: Int32) throws {
+        var status = stat()
+        guard fstat(fileDescriptor, &status) == 0 else {
+            throw ImportedFilePathError.destinationUnavailable
+        }
+        guard UInt64(status.st_dev) == volumeNumber,
+              UInt64(status.st_ino) == fileNumber else {
+            throw ImportedFilePathError.destinationChanged
+        }
+    }
 }
 
 public enum ImportedFilePathPolicy {

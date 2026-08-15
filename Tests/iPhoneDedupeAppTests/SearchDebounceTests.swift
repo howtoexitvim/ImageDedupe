@@ -22,7 +22,7 @@ final class SearchDebounceTests: XCTestCase {
                     width: nil,
                     height: nil
                 ),
-                cameraFile: ICCameraFile()
+                token: .fixture()
             )
         }
         viewModel.refreshVisibleOrder()

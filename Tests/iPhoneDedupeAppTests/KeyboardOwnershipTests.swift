@@ -21,7 +21,7 @@ final class KeyboardOwnershipTests: XCTestCase {
                 width: nil,
                 height: nil
             ),
-            cameraFile: ICCameraFile()
+            token: .fixture()
         )
     }
 

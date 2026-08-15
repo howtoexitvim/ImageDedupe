@@ -1,13 +1,13 @@
 import AppKit
 import DeduperCore
-import ImageCaptureCore
+import DeviceMediaKit
 import XCTest
 @testable import iPhoneDedupeApp
 
 @MainActor
 final class InspectorPreviewPipelineTests: XCTestCase {
     private struct PendingRequest {
-        let file: ICCameraFile
+        let token: DeviceFileToken
         let maxPixelSize: Int
         let completion: @Sendable (NSImage?) -> Void
     }
@@ -28,7 +28,7 @@ final class InspectorPreviewPipelineTests: XCTestCase {
                 width: width,
                 height: height
             ),
-            cameraFile: ICCameraFile()
+            token: .fixture(name: "\(id).\(kind.lowercased())", kind: kind)
         )
     }
 
@@ -52,7 +52,7 @@ final class InspectorPreviewPipelineTests: XCTestCase {
     func testRapidSelectionRunsAThenOnlyTheLatestC() async {
         var requests: [PendingRequest] = []
         let viewModel = MediaBrowserViewModel(inspectorPreviewRequest: { file, size, completion in
-            requests.append(PendingRequest(file: file, maxPixelSize: size, completion: completion))
+            requests.append(PendingRequest(token: file, maxPixelSize: size, completion: completion))
         })
         let a = item("a")
         let b = item("b")
@@ -66,7 +66,7 @@ final class InspectorPreviewPipelineTests: XCTestCase {
         await Task.yield()
 
         XCTAssertEqual(requests.count, 2)
-        XCTAssertTrue(requests[1].file === c.cameraFile)
+        XCTAssertEqual(requests[1].token, c.token)
         XCTAssertNotNil(viewModel.inspectorPreviewCache["a"])
         XCTAssertNil(viewModel.inspectorPreviewCache["b"])
     }
@@ -74,7 +74,7 @@ final class InspectorPreviewPipelineTests: XCTestCase {
     func testReturningToCachedItemDoesNotRequestAgain() async {
         var requests: [PendingRequest] = []
         let viewModel = MediaBrowserViewModel(inspectorPreviewRequest: { file, size, completion in
-            requests.append(PendingRequest(file: file, maxPixelSize: size, completion: completion))
+            requests.append(PendingRequest(token: file, maxPixelSize: size, completion: completion))
         })
         let a = item("a")
         viewModel.loadInspectorPreview(for: a)
@@ -104,7 +104,7 @@ final class InspectorPreviewPipelineTests: XCTestCase {
     func testFailureRetriesOnlyAfterSelectionLeavesAndReturns() async {
         var requests: [PendingRequest] = []
         let viewModel = MediaBrowserViewModel(inspectorPreviewRequest: { file, size, completion in
-            requests.append(PendingRequest(file: file, maxPixelSize: size, completion: completion))
+            requests.append(PendingRequest(token: file, maxPixelSize: size, completion: completion))
         })
         let a = item("a")
         viewModel.loadInspectorPreview(for: a)
@@ -120,19 +120,19 @@ final class InspectorPreviewPipelineTests: XCTestCase {
         await Task.yield()
 
         XCTAssertEqual(requests.count, 3)
-        XCTAssertTrue(requests[2].file === a.cameraFile)
+        XCTAssertEqual(requests[2].token, a.token)
     }
 
     func testVideoUsesTheSameStaticPreviewRequest() {
-        var requestedFile: ICCameraFile?
+        var requestedToken: DeviceFileToken?
         let video = item("video", kind: "MOV")
         let viewModel = MediaBrowserViewModel(inspectorPreviewRequest: { file, _, _ in
-            requestedFile = file
+            requestedToken = file
         })
 
         viewModel.loadInspectorPreview(for: video)
 
-        XCTAssertTrue(requestedFile === video.cameraFile)
+        XCTAssertEqual(requestedToken, video.token)
     }
 
     func testNineSuccessfulPreviewsEvictTheLeastRecentlyUsedID() async {

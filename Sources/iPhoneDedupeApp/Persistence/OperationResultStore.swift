@@ -46,16 +46,30 @@ struct OperationResultStore {
     @discardableResult
     func append(_ record: OperationResultRecord) throws -> [OperationResultRecord] {
         let existing = load().records
-        guard record.hasIssues else { return existing }
+        guard record.shouldPersist else { return existing }
 
-        let records = Array(([record] + existing).prefix(maximumRecordCount))
+        let candidates = [record] + existing.filter { $0.id != record.id }
+        let pendingCount = candidates.lazy.filter(\.isPendingDeleteAudit).count
+        let resolvedSlots = max(0, maximumRecordCount - pendingCount)
+        var acceptedResolved = 0
+        let records = candidates.filter { candidate in
+            if candidate.isPendingDeleteAudit { return true }
+            guard acceptedResolved < resolvedSlots else { return false }
+            acceptedResolved += 1
+            return true
+        }
         try save(records)
         return records
     }
 
     func clear() throws {
         guard FileManager.default.fileExists(atPath: fileURL.path) else { return }
-        try FileManager.default.removeItem(at: fileURL)
+        let pending = load().records.filter(\.isPendingDeleteAudit)
+        if pending.isEmpty {
+            try FileManager.default.removeItem(at: fileURL)
+        } else {
+            try save(pending)
+        }
     }
 
     private func save(_ records: [OperationResultRecord]) throws {

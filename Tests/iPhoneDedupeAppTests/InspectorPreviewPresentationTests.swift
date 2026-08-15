@@ -17,7 +17,7 @@ final class InspectorPreviewPresentationTests: XCTestCase {
                 width: 4_032,
                 height: 3_024
             ),
-            cameraFile: ICCameraFile()
+            token: .fixture()
         )
     }
 

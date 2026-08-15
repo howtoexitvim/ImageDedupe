@@ -1,5 +1,4 @@
 import AppKit
-import ImageCaptureCore
 import ImageIO
 
 public enum InspectorPreviewProvider {
@@ -11,20 +10,7 @@ public enum InspectorPreviewProvider {
         return min(knownLongestEdge, maximumPixelSize)
     }
 
-    public static func requestPreview(
-        for file: ICCameraFile,
-        maxPixelSize: Int,
-        completion: @escaping @Sendable (NSImage?) -> Void
-    ) {
-        let clampedSize = max(1, min(maxPixelSize, maximumPixelSize))
-        file.requestThumbnailData(
-            options: [.imageSourceThumbnailMaxPixelSize: clampedSize]
-        ) { data, _ in
-            completion(data.flatMap { decode($0, maxPixelSize: clampedSize) })
-        }
-    }
-
-    static func decode(_ data: Data, maxPixelSize: Int) -> NSImage? {
+    public static func decode(_ data: Data, maxPixelSize: Int) -> NSImage? {
         guard let source = CGImageSourceCreateWithData(data as CFData, nil),
               let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
               let width = (properties[kCGImagePropertyPixelWidth] as? NSNumber)?.intValue,

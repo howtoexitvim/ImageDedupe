@@ -1,12 +1,10 @@
 import DeduperCore
-import ImageCaptureCore
 import XCTest
 @testable import iPhoneDedupeApp
 
 /// Integration coverage for the view model's use of `MediaSelectionState`.
 ///
-/// These tests never touch a device: `ICCameraFile()` is an empty placeholder object and
-/// no scan, import, or delete path is exercised here.
+/// These tests use pure device tokens and never run scan, import, or delete paths.
 @MainActor
 final class MediaBrowserSelectionTests: XCTestCase {
     private func item(_ id: String, name: String? = nil, kind: String = "heic", size: Int64 = 1_000) -> MediaBrowserViewModel.MediaItem {
@@ -20,7 +18,7 @@ final class MediaBrowserSelectionTests: XCTestCase {
                 width: nil,
                 height: nil
             ),
-            cameraFile: ICCameraFile()
+            token: .fixture()
         )
     }
 

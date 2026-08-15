@@ -132,6 +132,29 @@ final class DeviceCommandSchedulerTests: XCTestCase {
         await scheduler.release(third)
     }
 
+    func testInvalidationRejectsQueuedAndFutureCommandsEvenAfterActiveRelease() async throws {
+        let scheduler = DeviceCommandScheduler()
+        let active = try await scheduler.acquire(priority: .low, generation: nil)
+        let queuedTask = Task { try await scheduler.acquire(priority: .high, generation: nil) }
+        await waitUntil { await scheduler.waitingCount == 1 }
+
+        await scheduler.invalidate()
+
+        do {
+            _ = try await queuedTask.value
+            XCTFail("Expected queued command rejection")
+        } catch {
+            XCTAssertEqual(error as? DeviceCommandScheduler.AcquireError, .invalidated)
+        }
+        await scheduler.release(active)
+        do {
+            _ = try await scheduler.acquire(priority: .high, generation: nil)
+            XCTFail("Expected future command rejection")
+        } catch {
+            XCTAssertEqual(error as? DeviceCommandScheduler.AcquireError, .invalidated)
+        }
+    }
+
     func testDeviceFileTokenRoundTripsAndFingerprintNormalizationIsStable() throws {
         let generation = UUID()
         let timestamp = Date(timeIntervalSince1970: 1_786_780_800)

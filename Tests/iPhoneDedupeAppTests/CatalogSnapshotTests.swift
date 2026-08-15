@@ -24,7 +24,7 @@ final class CatalogSnapshotTests: XCTestCase {
                     height: 3_024,
                     duration: index.isMultiple(of: 3) ? Double(index % 120) : nil
                 ),
-                cameraFile: ICCameraFile()
+                token: .fixture()
             )
         }
     }
