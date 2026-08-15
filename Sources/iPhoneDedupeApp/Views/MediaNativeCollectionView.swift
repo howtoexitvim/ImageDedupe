@@ -147,8 +147,10 @@ final class MediaNativeCollectionView: NSCollectionView {
                 )
                 guard travelled >= MediaTableMetrics.dragActivationDistance else { continue }
                 let modifiers = MediaTableController.Modifiers(event.modifierFlags)
+                // Option-drag removes from the selection, matching Finder.
                 coordinator.viewModel.beginMarqueeSelection(
-                    additive: modifiers.contains(.command) || modifiers.contains(.shift)
+                    additive: modifiers.contains(.command) || modifiers.contains(.shift),
+                    deselecting: modifiers.contains(.option)
                 )
                 marqueeAnchor = anchor
                 didBegin = true

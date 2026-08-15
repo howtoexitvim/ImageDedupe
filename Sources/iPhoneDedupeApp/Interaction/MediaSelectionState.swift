@@ -204,34 +204,51 @@ struct MediaSelectionState: Equatable {
 
     // MARK: - Drag selection
 
+    /// Whether the in-progress drag is removing rather than adding.
+    ///
+    /// Finder decides this from the item the drag starts on: begin on an unselected item
+    /// and the drag selects; begin on a selected one and it deselects. Without this a drag
+    /// could only ever add, so there was no way to undo part of a selection by dragging
+    /// back over it.
+    private var isDragDeselecting = false
+
     mutating func beginDragSelection(at id: String) {
         guard contains(id) else { return }
         focusOwner = .mediaBrowser
+        isDragDeselecting = actionSelectedIDs.contains(id)
         dragBaseSelection = actionSelectedIDs
         dragOriginID = id
         anchorID = id
         focusedID = id
-        actionSelectedIDs.insert(id)
+        if isDragDeselecting {
+            actionSelectedIDs.remove(id)
+        } else {
+            actionSelectedIDs.insert(id)
+        }
         endExtension()
     }
 
-    /// Replaces the range produced by the current drag, keeping pre-drag selection intact.
+    /// Applies the drag's range on top of the selection as it stood before the drag, either
+    /// adding or removing depending on where the drag started. Shrinking the range restores
+    /// the rows it no longer covers.
     mutating func updateDragSelection(to id: String) {
         guard contains(id), let origin = dragOriginID, let base = dragBaseSelection else { return }
         focusedID = id
-        actionSelectedIDs = base.union(ids(from: origin, to: id))
+        let range = ids(from: origin, to: id)
+        actionSelectedIDs = isDragDeselecting ? base.subtracting(range) : base.union(range)
     }
 
     /// Starts a marquee drag from blank canvas, where there is no origin item.
     ///
     /// Additive drags (Command or Shift held) keep the existing selection as their base;
     /// a plain drag replaces it, matching Finder.
-    mutating func beginMarqueeSelection(additive: Bool) {
+    mutating func beginMarqueeSelection(additive: Bool, deselecting: Bool = false) {
         focusOwner = .mediaBrowser
-        dragBaseSelection = additive ? actionSelectedIDs : []
+        isDragDeselecting = deselecting
+        dragBaseSelection = (additive || deselecting) ? actionSelectedIDs : []
         dragOriginID = nil
         isMarqueeSelecting = true
-        if !additive {
+        if !additive && !deselecting {
             actionSelectedIDs.removeAll()
         }
         endExtension()
@@ -242,14 +259,15 @@ struct MediaSelectionState: Equatable {
     /// the marquee itself added.
     mutating func updateMarqueeSelection(intersecting ids: Set<String>) {
         guard isMarqueeSelecting, let base = dragBaseSelection else { return }
-        let valid = ids.filter { contains($0) }
-        actionSelectedIDs = base.union(valid)
+        let valid = Set(ids.filter { contains($0) })
+        actionSelectedIDs = isDragDeselecting ? base.subtracting(valid) : base.union(valid)
     }
 
     mutating func endDragSelection() {
         dragBaseSelection = nil
         dragOriginID = nil
         isMarqueeSelecting = false
+        isDragDeselecting = false
     }
 
     private var isMarqueeSelecting = false

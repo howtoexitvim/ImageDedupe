@@ -337,9 +337,9 @@ final class MediaBrowserViewModel: ObservableObject {
     }
 
     /// Starts a Grid marquee from blank canvas.
-    func beginMarqueeSelection(additive: Bool) {
+    func beginMarqueeSelection(additive: Bool, deselecting: Bool = false) {
         refreshVisibleOrder()
-        selection.beginMarqueeSelection(additive: additive)
+        selection.beginMarqueeSelection(additive: additive, deselecting: deselecting)
     }
 
     func updateMarqueeSelection(intersecting ids: Set<String>) {
@@ -564,6 +564,10 @@ final class MediaBrowserViewModel: ObservableObject {
         allItems = payload.items
         duplicatePlan = payload.plan
         selection = MediaSelectionState()
+        // A scan can land while the user is mid-word. Applying the pending query now keeps
+        // the visible field and the filtered catalog in agreement, instead of showing an
+        // unfiltered list under a non-empty search box until the debounce fires.
+        flushPendingSearch()
         refreshVisibleOrder()
         importedItemIDs.removeAll()
         status = "Scanned \(payload.items.count) items. Conservative duplicates: \(payload.plan.delete.count)."
