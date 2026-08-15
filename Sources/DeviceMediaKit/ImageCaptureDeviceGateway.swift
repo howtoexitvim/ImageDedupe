@@ -400,7 +400,8 @@ public final class ImageCaptureDeviceGateway: NSObject, @preconcurrency ICDevice
         let generation = UUID()
         let cameraFiles = (device.mediaFiles ?? []).compactMap { $0 as? ICCameraFile }
         var resolved: [DeviceFileToken: ICCameraFile] = [:]
-        let catalogFiles = cameraFiles.enumerated().map { index, file in
+        var catalogIndex = DeviceCatalogIndex()
+        for (index, file) in cameraFiles.enumerated() {
             let model = Self.makeDeviceMediaFile(file, fallbackIndex: index)
             let token = DeviceFileToken(
                 generation: generation,
@@ -412,19 +413,18 @@ public final class ImageCaptureDeviceGateway: NSObject, @preconcurrency ICDevice
                     timestamp: Self.timestampDate(for: file)
                 )
             )
+            let catalogFile = DeviceCatalogFile(model: model, token: token)
+            guard catalogIndex.insert(catalogFile) else { continue }
             resolved[token] = file
-            return DeviceCatalogFile(model: model, token: token)
         }
         catalogGeneration = generation
         filesByToken = resolved
-        filenamesByToken = Dictionary(uniqueKeysWithValues: catalogFiles.map {
-            ($0.token, $0.model.name)
-        })
+        filenamesByToken = catalogIndex.filenamesByToken
         finishScan(.success(DeviceCatalogSnapshot(
             generation: generation,
             deviceName: device.name ?? "unknown",
             deviceIdentityHash: Self.deviceIdentityHash(for: device),
-            files: catalogFiles
+            files: catalogIndex.files
         )))
     }
 

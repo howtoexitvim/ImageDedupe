@@ -29,3 +29,15 @@ public struct DeviceCatalogSnapshot: Equatable, Codable, Sendable {
         self.files = files
     }
 }
+
+struct DeviceCatalogIndex {
+    private(set) var files: [DeviceCatalogFile] = []
+    private(set) var filenamesByToken: [DeviceFileToken: String] = [:]
+
+    mutating func insert(_ file: DeviceCatalogFile) -> Bool {
+        guard filenamesByToken[file.token] == nil else { return false }
+        files.append(file)
+        filenamesByToken[file.token] = file.model.name
+        return true
+    }
+}

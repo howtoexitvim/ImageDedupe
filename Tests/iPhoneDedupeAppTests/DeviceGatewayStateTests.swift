@@ -5,6 +5,34 @@ import XCTest
 
 @MainActor
 final class DeviceGatewayStateTests: XCTestCase {
+    func testCatalogIndexDropsRepeatedFrameworkTokenWithoutTrapping() {
+        let generation = UUID()
+        let token = DeviceFileToken(
+            generation: generation,
+            objectHandle: 42,
+            fingerprint: DeviceFileFingerprint(
+                name: "IMG_0042.HEIC",
+                kind: "HEIC",
+                size: 100,
+                timestamp: nil
+            )
+        )
+        let first = DeviceCatalogFile(
+            model: makeModel(id: "first", name: "IMG_0042.HEIC"),
+            token: token
+        )
+        let repeated = DeviceCatalogFile(
+            model: makeModel(id: "repeated", name: "IMG_0042.HEIC"),
+            token: token
+        )
+        var index = DeviceCatalogIndex()
+
+        XCTAssertTrue(index.insert(first))
+        XCTAssertFalse(index.insert(repeated))
+        XCTAssertEqual(index.files, [first])
+        XCTAssertEqual(index.filenamesByToken, [token: "IMG_0042.HEIC"])
+    }
+
     func testTransientUnlockOpenErrorRetriesOnTheSameDevice() async {
         let gateway = ImageCaptureDeviceGateway(openSessionRetryDelay: .milliseconds(1))
         let camera = OpenSessionRecordingCameraDevice()
