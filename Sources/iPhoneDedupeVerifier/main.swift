@@ -344,6 +344,8 @@ do {
     switch args.command {
     case "scan":
         try await runScan(timeout: args.timeout)
+    case "session-check":
+        await SessionCheck.run(timeout: args.timeout, pauseSeconds: args.pauseSeconds)
     case "double-scan":
         // Diagnostic: isolates whether a second scan on the same gateway completes, with no
         // delete involved. A one-file delete took minutes because its verification rescan

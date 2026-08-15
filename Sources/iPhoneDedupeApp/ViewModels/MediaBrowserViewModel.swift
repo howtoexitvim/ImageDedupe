@@ -76,7 +76,13 @@ final class MediaBrowserViewModel: ObservableObject {
         Int,
         @escaping @Sendable (NSImage?) -> Void
     ) -> Void
-    private let gateway: ImageCaptureDeviceGateway
+    /// Every device command goes through here, and each scan runs a fresh helper process.
+    ///
+    /// ImageCaptureCore enumerates a device once per process and never again, so an
+    /// in-process rescan can only replay the catalog captured when the session opened. That
+    /// is what made new photos invisible until relaunch and left post-delete verification
+    /// with nothing trustworthy to read.
+    private let deviceSession: DeviceSession
     private let stagingManager: ImportStagingManager
     private let importPreflight: ImportPreflight
     private let inspectorPreviewRequest: InspectorPreviewRequest
@@ -88,7 +94,7 @@ final class MediaBrowserViewModel: ObservableObject {
 
     init(
         operationResultStore: OperationResultStore = .applicationSupport(),
-        gateway: ImageCaptureDeviceGateway? = nil,
+        deviceSession: DeviceSession? = nil,
         stagingManager: ImportStagingManager = .applicationCaches(),
         importPreflight: @escaping ImportPreflight = { destination, items in
             ImportDestinationPreflight.inspect(destination: destination, items: items)
@@ -97,20 +103,22 @@ final class MediaBrowserViewModel: ObservableObject {
         inspectorPreviewRequest: InspectorPreviewRequest? = nil,
         verificationScan: VerificationScan? = nil
     ) {
-        let resolvedGateway = gateway ?? ImageCaptureDeviceGateway()
-        self.gateway = resolvedGateway
+        let resolvedSession = deviceSession ?? DeviceSession()
+        self.deviceSession = resolvedSession
         self.stagingManager = stagingManager
         self.operationResultStore = operationResultStore
         self.importPreflight = importPreflight
         self.inspectorPreviewTimeout = inspectorPreviewTimeout
         self.verificationScan = verificationScan ?? { timeout in
-            try await resolvedGateway.scan(timeout: timeout)
+            // A fresh helper process, so verification finally reads the device as it is
+            // rather than the catalog this app captured at launch.
+            try await resolvedSession.scan(timeout: timeout)
         }
         self.inspectorPreviewRequest = inspectorPreviewRequest ?? { token, maxPixelSize, completion in
             Task { @MainActor in
                 let image: NSImage?
                 do {
-                    let data = try await resolvedGateway.thumbnailData(
+                    let data = try await resolvedSession.thumbnailData(
                         for: token,
                         maxPixelSize: maxPixelSize,
                         timeout: .seconds(12)
@@ -385,7 +393,7 @@ final class MediaBrowserViewModel: ObservableObject {
                 return
             }
             do {
-                let snapshot = try await self.gateway.scan(timeout: .seconds(180))
+                let snapshot = try await self.deviceSession.scan(timeout: .seconds(180))
                 let items = snapshot.files.map { MediaItem(model: $0.model, token: $0.token) }
                 let payload = ScanPayload(
                     deviceName: snapshot.deviceName,
@@ -590,14 +598,30 @@ final class MediaBrowserViewModel: ObservableObject {
         Task { [weak self, destination = importDestination, stagingManager] in
             defer { try? stagingManager.cleanup(stagingSession) }
             guard let self else { return }
-            var summary = await self.gateway.download(
-                items.map(\.token),
-                to: stagingSession,
-                cancellation: cancellation,
-                onProgress: { update in
-                    self.applyOperationProgress(update, for: .importing)
-                }
-            )
+            // The helper stages the bytes; committing them to the user's destination stays
+            // here, where the preflight and the imported-path policy already live.
+            var summary: DeviceGatewayImportSummary
+            do {
+                summary = try await self.deviceSession.download(
+                    items.map(\.token),
+                    stagingDirectory: stagingSession.directory,
+                    onProgress: { update in
+                        Task { @MainActor in
+                            self.applyOperationProgress(update, for: .importing)
+                        }
+                    }
+                )
+            } catch {
+                summary = DeviceGatewayImportSummary(
+                    failed: items.map {
+                        DeviceOperationFailure(
+                            token: $0.token,
+                            filename: $0.model.name,
+                            reason: error.localizedDescription
+                        )
+                    }
+                )
+            }
             let itemByToken = Dictionary(uniqueKeysWithValues: items.map { ($0.token, $0) })
             var committed: [DeviceDownloadSuccess] = []
             for download in summary.successful {
@@ -669,18 +693,23 @@ final class MediaBrowserViewModel: ObservableObject {
         Task { [weak self] in
             guard let self else { return }
             do {
-                let summary = try await self.gateway.delete(
+                let (summary, observedRemovedHandles) = try await self.deviceSession.delete(
                     snapshot.items.map(\.token),
                     confirmed: true,
-                    cancellation: cancellation,
                     onProgress: { update in
-                        self.applyOperationProgress(update, for: .deleting)
+                        Task { @MainActor in
+                            self.applyOperationProgress(update, for: .deleting)
+                        }
                     }
                 )
+                // The removal evidence comes back with the summary rather than being read
+                // from the gateway afterwards. Across a process boundary there is no
+                // "afterwards" to read from, and coupling them is also what stops evidence
+                // from one delete being attributed to another.
                 self.beginVerification(
                     snapshot: snapshot,
                     summary: summary,
-                    observedRemovedHandles: self.gateway.observedRemovals
+                    observedRemovedHandles: observedRemovedHandles
                 )
             } catch {
                 let summary = DeviceGatewayDeleteSummary(failed: snapshot.items.map {
@@ -704,6 +733,10 @@ final class MediaBrowserViewModel: ObservableObject {
         operationProgress = progress
         status = progress.detail
         _ = operationCancellation?.cancel()
+        // The work now runs in the helper process, so the in-process cancellation object
+        // alone would signal nothing. The helper handles `cancel` off its request loop, so
+        // it acts on this immediately rather than after the operation it interrupts.
+        Task { [deviceSession] in await deviceSession.cancel() }
 
         // Cancel must settle the UI within a bounded time even if ImageCaptureCore never
         // acknowledges. During verification the owning task is canceled directly, which is
@@ -761,7 +794,7 @@ final class MediaBrowserViewModel: ObservableObject {
         // tell the truth: it re-lists files that were already deleted and puts their rows
         // back. Refusing here is better than resurrecting them. See `docs/todo.md` P0-1.
         guard Self.verifiesDeletesAutomatically else {
-            status = "Verification needs a fresh catalog. Reopen the app, then scan."
+            status = "Verification needs a fresh catalog. Scan the device, then retry."
             return
         }
         guard !operationState.isBusy,
@@ -771,7 +804,7 @@ final class MediaBrowserViewModel: ObservableObject {
             return
         }
         status = "Verifying the saved delete audit…"
-        // Scan-only by construction: this path never calls `gateway.delete`.
+        // Scan-only by construction: this path never calls `deviceSession.delete`.
         operationProgress = MediaOperationProgress(
             kind: .deleting,
             totalItems: audit.snapshot.items.count
@@ -842,7 +875,7 @@ final class MediaBrowserViewModel: ObservableObject {
             }
             var loaded: [(id: String, image: NSImage)] = []
             for item in missing {
-                guard let data = try? await self.gateway.thumbnailData(
+                guard let data = try? await self.deviceSession.thumbnailData(
                     for: item.token,
                     maxPixelSize: 512,
                     timeout: .seconds(6)
@@ -1096,7 +1129,7 @@ final class MediaBrowserViewModel: ObservableObject {
             guard let self else {
                 return
             }
-            let summary = try? await self.gateway.metadata(for: item.token, timeout: .seconds(30))
+            let summary = try? await self.deviceSession.metadata(for: item.token, timeout: .seconds(30))
             self.cacheMetadata(summary, id: item.id, generation: generation)
         }
     }
@@ -1152,26 +1185,24 @@ final class MediaBrowserViewModel: ObservableObject {
 
     /// How long a verification rescan may run before it is abandoned as pending.
     ///
-    /// Short on purpose. A second scan on the same gateway currently never completes — a
-    /// device measurement showed the first scan finishing in 1.1 s and the second timing out
-    /// — so a long timeout only makes the user wait for an answer that is not coming.
-    /// Verification therefore fails fast and is recorded as pending, and the delete result
-    /// stays honest instead of blocking the UI.
-    static let verificationTimeout: Duration = .seconds(8)
+    /// A verification scan now runs in a fresh helper process, which does complete: measured
+    /// at about 1.1 s for ~3,960 items. The bound stays generous enough for a large catalog
+    /// on a busy device while still failing fast rather than blocking the UI, since a
+    /// pending record is an honest outcome and a hung one is not.
+    static let verificationTimeout: Duration = .seconds(30)
 
     /// Whether a delete automatically rescans to verify.
     ///
-    /// Off, at the user's direction, after measuring the alternatives on a real device.
-    /// A read-only rescan is fast (~0.6 s), but a rescan *after a delete* does not work:
-    /// ImageCaptureCore serves the adopted session's stale cache, and forcing a fresh
-    /// enumeration by closing the session put the scan back into its full timeout. Three
-    /// approaches were tried and measured; a one-file delete cost over six minutes.
+    /// Back on, now that a rescan can actually observe the device. It was switched off
+    /// because verification could only ever read the catalog captured when the app's single
+    /// ImageCaptureCore session opened, so it could not confirm anything, and forcing a
+    /// fresh enumeration in-process pushed a one-file delete past six minutes.
     ///
-    /// The delete itself is fast and correct — device checks confirmed each file was
-    /// removed. So the delete is submitted and reported honestly, and the user rescans when
-    /// they want confirmation. Rows are still never removed without proof, and Results still
-    /// offers Retry Verification.
-    static let verifiesDeletesAutomatically = false
+    /// Verification now runs in a new helper process, which re-enumerates in about a
+    /// second. Restoring this also restores Retry Verification, which is keyed on the same
+    /// flag, and it can no longer resurrect deleted rows from a stale catalog because the
+    /// catalog it reads is current.
+    static let verifiesDeletesAutomatically = true
 
     /// How long the UI waits for the framework to acknowledge a cancellation before it
     /// settles anyway. The operation is then recorded as verification-pending.
@@ -1336,8 +1367,8 @@ final class MediaBrowserViewModel: ObservableObject {
                     frameworkSummary: summary
                 ),
                 status: failed == 0
-                    ? "Deleted \(removed) item(s). Reopen the app to refresh the device catalog."
-                    : "Delete submitted: \(removed) reported removed, \(failed) failed. Reopen the app to refresh the device catalog."
+                    ? "Deleted \(removed) item(s). Scan to refresh the device catalog."
+                    : "Delete submitted: \(removed) reported removed, \(failed) failed. Scan to refresh the device catalog."
             )
             // Hide the rows the device reported as deleted, so the list matches what the
             // user just did. This is presentation only: the audit still records the delete
