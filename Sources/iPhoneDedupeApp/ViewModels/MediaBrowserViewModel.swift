@@ -26,7 +26,11 @@ final class MediaBrowserViewModel: ObservableObject {
     }
 
     @Published var deviceName = "No Device"
-    @Published var allItems: [MediaItem] = []
+    /// `didSet` rather than bumping at each call site, so a future mutation cannot forget
+    /// to invalidate the derived catalog and silently serve a stale snapshot.
+    @Published var allItems: [MediaItem] = [] {
+        didSet { catalogVersion &+= 1 }
+    }
 
     /// Phase 1: focus and action selection live in one deterministic, unit-tested model.
     /// Views keep reading `selectedItemID` / `selectedActionIDs`, which now project it.
@@ -79,7 +83,9 @@ final class MediaBrowserViewModel: ObservableObject {
     @Published var thumbnailCache: [String: NSImage] = [:]
     @Published var metadataCache: [String: MediaMetadataSummary] = [:]
     @Published var importedItemIDs: Set<String> = []
-    @Published var duplicatePlan = DuplicatePlan(keep: [], delete: [])
+    @Published var duplicatePlan = DuplicatePlan(keep: [], delete: []) {
+        didSet { catalogVersion &+= 1 }
+    }
     @Published var importDestination = FileManager.default.urls(for: .picturesDirectory, in: .userDomainMask).first ?? URL(fileURLWithPath: NSHomeDirectory())
     @Published var lastImportedFileURL: URL?
 
@@ -94,27 +100,99 @@ final class MediaBrowserViewModel: ObservableObject {
     /// and action selection are reconciled exactly once per state change instead of
     /// drifting behind search, sort, scope, scan, import, or delete.
     func refreshVisibleOrder() {
-        selection.setVisibleIDs(filteredItems.map(\.id))
+        selection.setVisibleIDs(visibleItems.map(\.id))
     }
 
-    var filteredItems: [MediaItem] {
+    // MARK: - Derived catalog
+
+    /// Inputs that change what the browser shows.
+    ///
+    /// This must stay cheap to compute: it is checked on every read, so building arrays
+    /// here would cost as much as the derivation it avoids. `catalogVersion` stands in for
+    /// the item list, and is bumped whenever `allItems` or the duplicate plan changes.
+    private struct CatalogKey: Equatable {
+        let catalogVersion: Int
+        let scope: MediaReviewScope
+        let searchText: String
+        let sortField: MediaSortField
+        let sortOrder: DeduperCore.SortOrder
+    }
+
+    private var cachedCatalogKey: CatalogKey?
+    private var cachedVisibleItems: [MediaItem] = []
+    private var cachedItemIndexByID: [String: Int] = [:]
+
+    /// Bumped by every mutation of `allItems` or `duplicatePlan`.
+    private var catalogVersion = 0
+
+    /// How many times the catalog has actually been derived. Test-only instrumentation
+    /// that keeps the caching guarantee honest.
+    private(set) var catalogDerivationCount = 0
+
+    private var currentCatalogKey: CatalogKey {
+        CatalogKey(
+            catalogVersion: catalogVersion,
+            scope: reviewScope,
+            searchText: searchText,
+            sortField: sortField,
+            sortOrder: sortOrder
+        )
+    }
+
+    /// The filtered, searched, and sorted catalog the browser is showing.
+    ///
+    /// Derived at most once per state change. Every renderer, the status bar, and the
+    /// selection model read this same snapshot.
+    var visibleItems: [MediaItem] {
+        let key = currentCatalogKey
+        if cachedCatalogKey == key {
+            return cachedVisibleItems
+        }
+        deriveVisibleItems(key: key)
+        return cachedVisibleItems
+    }
+
+    /// Kept as the previous name so call sites and tests reading `filteredItems` continue
+    /// to work; it is now the cached snapshot rather than a fresh derivation.
+    var filteredItems: [MediaItem] { visibleItems }
+
+    private func deriveVisibleItems(key: CatalogKey) {
+        catalogDerivationCount += 1
+
         let scopedModels = reviewScope.apply(to: allItems.map(\.model), duplicatePlan: duplicatePlan)
         let scopedIDs = Set(scopedModels.map(\.id))
-        let scopedItems = allItems.filter { scopedIDs.contains($0.id) }
         let smartSearch = MediaSearchQuery(searchText)
-        let searchedItems = scopedItems.filter { smartSearch.matches($0.model) }
+        let searchedItems = allItems.filter { scopedIDs.contains($0.id) && smartSearch.matches($0.model) }
         let query = MediaQuery(
             filters: [],
             sort: MediaSortDescriptor(field: sortField, order: sortOrder)
         )
         let filteredModels = query.apply(to: searchedItems.map(\.model))
         let itemByID = Dictionary(uniqueKeysWithValues: searchedItems.map { ($0.id, $0) })
-        return filteredModels.compactMap { itemByID[$0.id] }
+
+        var items: [MediaItem] = []
+        var indexByID: [String: Int] = [:]
+        items.reserveCapacity(filteredModels.count)
+        indexByID.reserveCapacity(filteredModels.count)
+        for model in filteredModels {
+            guard let item = itemByID[model.id] else { continue }
+            indexByID[item.id] = items.count
+            items.append(item)
+        }
+
+        cachedVisibleItems = items
+        cachedItemIndexByID = indexByID
+        cachedCatalogKey = key
     }
 
+    /// O(1) lookup instead of a linear scan through the visible catalog.
     var selectedItem: MediaItem? {
         guard let selectedItemID else { return nil }
-        return filteredItems.first { $0.id == selectedItemID }
+        let items = visibleItems
+        guard let index = cachedItemIndexByID[selectedItemID], items.indices.contains(index) else {
+            return nil
+        }
+        return items[index]
     }
 
     var duplicateDeleteIDs: Set<String> {
