@@ -42,8 +42,13 @@ enum MediaPaneLayout {
     ///
     /// This is derived rather than hard-coded: the previous 940 pt literal drifted out of
     /// agreement with the pane minimums it was supposed to accommodate.
+    ///
+    /// The sidebar term uses its *ideal* width, not its minimum. Showing the inspector
+    /// inserts a whole pane into an already-minimum window, and with only the minimums
+    /// summed there is exactly zero slack — any sidebar wider than 180 pt immediately
+    /// pushes the center under its own minimum and clips the leading columns.
     static var minimumWindowWidth: CGFloat {
-        MediaPane.sidebar.minimumWidth + minimumCenterWidth + MediaPane.inspector.minimumWidth
+        MediaPane.sidebar.defaultWidth + minimumCenterWidth + MediaPane.inspector.minimumWidth
     }
 
     /// Room left for the center browser.

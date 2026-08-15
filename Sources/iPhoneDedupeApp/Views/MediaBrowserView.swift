@@ -47,11 +47,17 @@ struct MediaBrowserView: View {
                     Divider()
                     InspectorView(viewModel: viewModel)
                         .frame(
-                            minWidth: MediaPane.inspector.minimumWidth,
                             idealWidth: paneWidth(.inspector),
                             maxWidth: MediaPane.inspector.maximumWidth,
                             maxHeight: .infinity
                         )
+                        // Deliberately no hard `minWidth`. Both panes declaring a minimum
+                        // in a too-narrow HStack forces SwiftUI to violate one of them,
+                        // and it chose to clip the center browser's leading edge — the
+                        // checkbox, thumbnail, and name column vanished with nothing to
+                        // scroll to. The layout priority makes the inspector the pane that
+                        // yields, so the browser always keeps its declared minimum.
+                        .layoutPriority(-1)
                 }
             }
         }

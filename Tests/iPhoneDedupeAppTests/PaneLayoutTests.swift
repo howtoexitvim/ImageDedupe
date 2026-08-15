@@ -34,17 +34,56 @@ final class PaneLayoutTests: XCTestCase {
         XCTAssertEqual(MediaPane.inspector.defaultWidth, 300)
 
         XCTAssertEqual(MediaPaneLayout.minimumCenterWidth, 480)
-        XCTAssertEqual(MediaPaneLayout.minimumWindowWidth, 920)
+        XCTAssertEqual(MediaPaneLayout.minimumWindowWidth, 960)
+    }
+
+    /// Regression: showing the inspector inserts a pane into an already-minimum window.
+    /// With only the pane minimums summed there was exactly zero slack, so any sidebar
+    /// wider than its minimum pushed the center under 480 pt and clipped the List's
+    /// leading columns and the Grid's leading items.
+    func testShowingTheInspectorCannotPushTheCenterBelowItsMinimum() {
+        let center = MediaPaneLayout.centerWidth(
+            windowWidth: MediaPaneLayout.minimumWindowWidth,
+            sidebarWidth: MediaPane.sidebar.defaultWidth,
+            inspectorWidth: MediaPane.inspector.minimumWidth,
+            isSidebarCollapsed: false,
+            isInspectorCollapsed: false
+        )
+        XCTAssertGreaterThanOrEqual(center, MediaPaneLayout.minimumCenterWidth)
+    }
+
+    /// The same must hold with the inspector hidden, which is the easier case.
+    func testCenterKeepsItsMinimumWithTheInspectorHidden() {
+        let center = MediaPaneLayout.centerWidth(
+            windowWidth: MediaPaneLayout.minimumWindowWidth,
+            sidebarWidth: MediaPane.sidebar.defaultWidth,
+            inspectorWidth: MediaPane.inspector.defaultWidth,
+            isSidebarCollapsed: false,
+            isInspectorCollapsed: true
+        )
+        XCTAssertGreaterThanOrEqual(center, MediaPaneLayout.minimumCenterWidth)
+    }
+
+    /// The List needs more width than the center minimum to show every column, which is
+    /// why the table must overflow and scroll rather than compress.
+    func testListColumnsExceedTheCenterMinimumSoTheTableMustScroll() {
+        XCTAssertGreaterThan(
+            MediaTableColumn.totalDefaultWidth,
+            MediaPaneLayout.minimumCenterWidth,
+            "if columns fit the minimum center, horizontal scrolling would never be exercised"
+        )
     }
 
     /// Regression: the window minimum was a hard-coded 940 pt that had drifted out of
     /// agreement with the pane minimums. At 940 with default panes the center got only
     /// 420 pt — below its own 480 pt minimum — so the table's leading checkbox, thumbnail,
     /// and name columns were clipped with no way to scroll back to them.
-    func testWindowMinimumIsDerivedFromPaneMinimums() {
+    func testWindowMinimumIsDerivedFromPaneWidths() {
+        // The sidebar term is its ideal width, not its minimum, so that showing the
+        // inspector at a real sidebar width still leaves the center its full minimum.
         XCTAssertEqual(
             MediaPaneLayout.minimumWindowWidth,
-            MediaPane.sidebar.minimumWidth
+            MediaPane.sidebar.defaultWidth
                 + MediaPaneLayout.minimumCenterWidth
                 + MediaPane.inspector.minimumWidth
         )
@@ -72,19 +111,18 @@ final class PaneLayoutTests: XCTestCase {
         XCTAssertLessThanOrEqual(required, MediaPaneLayout.minimumWindowWidth)
     }
 
-    /// The ideal widths (220 + 480 + 300 = 1000) exceed the minimum window, which is fine:
-    /// at small widths the sidebars shrink toward their own minimums rather than the center
-    /// being squeezed below 480. This documents which pane yields.
-    func testIdealPanesExceedTheMinimumWindowSoSidebarsYieldFirst() {
+    /// The ideal widths (220 + 480 + 300 = 1000) exceed the minimum window (960), which is
+    /// fine: the inspector is the pane that yields, shrinking toward its own minimum so the
+    /// center browser always keeps its declared 480 pt.
+    func testInspectorYieldsSoTheCenterKeepsItsMinimum() {
         let idealTotal = MediaPane.sidebar.defaultWidth
             + MediaPaneLayout.minimumCenterWidth
             + MediaPane.inspector.defaultWidth
         XCTAssertGreaterThan(idealTotal, MediaPaneLayout.minimumWindowWidth)
 
-        // Shrinking both sidebars to their minimums is exactly enough for a full center.
-        let recovered = (MediaPane.sidebar.defaultWidth - MediaPane.sidebar.minimumWidth)
-            + (MediaPane.inspector.defaultWidth - MediaPane.inspector.minimumWidth)
-        XCTAssertGreaterThanOrEqual(idealTotal - recovered, MediaPaneLayout.minimumWindowWidth)
+        // Shrinking only the inspector to its minimum reaches the minimum window exactly.
+        let recovered = MediaPane.inspector.defaultWidth - MediaPane.inspector.minimumWidth
+        XCTAssertEqual(idealTotal - recovered, MediaPaneLayout.minimumWindowWidth)
     }
 
     func testCenterWidthForWindowRespectsPaneWidths() {
