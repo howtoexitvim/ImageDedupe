@@ -36,6 +36,7 @@ public enum DeviceGatewayError: Error, Equatable, LocalizedError, Sendable {
 public final class ImageCaptureDeviceGateway: NSObject, @preconcurrency ICDeviceBrowserDelegate, @preconcurrency ICCameraDeviceDelegate {
     private let deviceNameContains: String?
     private let scheduler: DeviceCommandScheduler
+    private let openSessionRetryDelay: Duration
     private let browser = ICDeviceBrowser()
 
     private var selectedDevice: ICCameraDevice?
@@ -46,14 +47,17 @@ public final class ImageCaptureDeviceGateway: NSObject, @preconcurrency ICDevice
     private var scanCallback: DeviceOneShotCallback<DeviceCatalogSnapshot>?
     private var scanCallbackToken: UUID?
     private var scanAbortError: DeviceCallbackError?
+    private var openSessionRetryTask: Task<Void, Never>?
     private var activeFrameworkProgress: Progress?
 
     public init(
         deviceNameContains: String? = nil,
-        scheduler: DeviceCommandScheduler = DeviceCommandScheduler()
+        scheduler: DeviceCommandScheduler = DeviceCommandScheduler(),
+        openSessionRetryDelay: Duration = .seconds(1)
     ) {
         self.deviceNameContains = deviceNameContains
         self.scheduler = scheduler
+        self.openSessionRetryDelay = openSessionRetryDelay
         super.init()
         browser.delegate = self
     }
@@ -344,7 +348,7 @@ public final class ImageCaptureDeviceGateway: NSObject, @preconcurrency ICDevice
         }
         selectedDevice = camera
         camera.delegate = self
-        camera.requestOpenSession()
+        requestOpenSession(on: camera)
     }
 
     public func deviceBrowser(_ browser: ICDeviceBrowser, didRemove device: ICDevice, moreGoing: Bool) {
@@ -364,7 +368,18 @@ public final class ImageCaptureDeviceGateway: NSObject, @preconcurrency ICDevice
             return
         }
         if let error {
+            let frameworkError = error as NSError
+            if OpenSessionRetry.shouldRetry(
+                domain: frameworkError.domain,
+                code: frameworkError.code,
+                description: frameworkError.localizedDescription
+            ) {
+                scheduleOpenSessionRetry(for: device)
+                return
+            }
             finishScan(.failure(.failed("Could not open ImageCaptureCore session: \(error.localizedDescription)")))
+        } else {
+            cancelOpenSessionRetry()
         }
     }
 
@@ -573,11 +588,13 @@ public final class ImageCaptureDeviceGateway: NSObject, @preconcurrency ICDevice
 
     private func finishScan(_ result: Result<DeviceCatalogSnapshot, DeviceCallbackError>) {
         guard let callback = scanCallback, let token = scanCallbackToken else { return }
+        cancelOpenSessionRetry()
         scanAbortError = nil
         callback.complete(token: token, result: result)
     }
 
     private func abortScan(with error: DeviceCallbackError) {
+        cancelOpenSessionRetry()
         stopBrowsing()
         guard let selectedDevice else {
             finishScan(.failure(error))
@@ -675,5 +692,38 @@ public final class ImageCaptureDeviceGateway: NSObject, @preconcurrency ICDevice
         let formatter = ISO8601DateFormatter()
         formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
         return formatter
+    }
+
+    private func scheduleOpenSessionRetry(for device: ICDevice) {
+        guard let camera = device as? ICCameraDevice, selectedDevice === camera else { return }
+        cancelOpenSessionRetry()
+        let expectedDevice = ObjectIdentifier(camera)
+        openSessionRetryTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            do {
+                try await Task.sleep(for: self.openSessionRetryDelay)
+            } catch {
+                return
+            }
+            guard
+                !Task.isCancelled,
+                self.scanAbortError == nil,
+                let selectedDevice = self.selectedDevice,
+                ObjectIdentifier(selectedDevice) == expectedDevice
+            else {
+                return
+            }
+            self.openSessionRetryTask = nil
+            self.requestOpenSession(on: selectedDevice)
+        }
+    }
+
+    private func requestOpenSession(on device: ICDevice) {
+        device.requestOpenSession()
+    }
+
+    private func cancelOpenSessionRetry() {
+        openSessionRetryTask?.cancel()
+        openSessionRetryTask = nil
     }
 }

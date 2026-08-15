@@ -1,9 +1,29 @@
 import DeduperCore
+@preconcurrency import ImageCaptureCore
 import XCTest
 @testable import DeviceMediaKit
 
 @MainActor
 final class DeviceGatewayStateTests: XCTestCase {
+    func testTransientUnlockOpenErrorRetriesOnTheSameDevice() async {
+        let gateway = ImageCaptureDeviceGateway(openSessionRetryDelay: .milliseconds(1))
+        let camera = OpenSessionRecordingCameraDevice()
+        gateway.deviceBrowser(ICDeviceBrowser(), didAdd: camera, moreComing: false)
+        XCTAssertEqual(camera.openSessionRequestCount, 1)
+
+        gateway.device(
+            camera,
+            didOpenSessionWithError: NSError(
+                domain: "com.apple.ImageCaptureCore",
+                code: -9943,
+                userInfo: [NSLocalizedDescriptionKey: "Please unlock \"Test iPhone\""]
+            )
+        )
+
+        await waitUntil { camera.openSessionRequestCount == 2 }
+        XCTAssertEqual(camera.openSessionRequestCount, 2)
+    }
+
     func testCatalogSnapshotContainsOnlyPureModelsAndTokens() throws {
         let generation = UUID()
         let model = makeModel(id: "device-42", name: "IMG_0042.HEIC")
@@ -131,5 +151,14 @@ final class DeviceGatewayStateTests: XCTestCase {
             await Task.yield()
         }
         XCTFail("Condition was not satisfied", file: file, line: line)
+    }
+}
+
+@MainActor
+private final class OpenSessionRecordingCameraDevice: ICCameraDevice {
+    nonisolated(unsafe) private(set) var openSessionRequestCount = 0
+
+    override func requestOpenSession() {
+        openSessionRequestCount += 1
     }
 }
