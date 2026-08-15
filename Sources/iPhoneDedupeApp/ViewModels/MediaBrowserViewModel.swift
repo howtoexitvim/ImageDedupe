@@ -67,6 +67,10 @@ final class MediaBrowserViewModel: ObservableObject {
     @Published var isShowingOperationHistory = false
     private let operationResultStore: OperationResultStore
     typealias ImportPreflight = (URL, [ImportDestinationPreflight.Item]) -> ImportDestinationPreflight.Outcome
+
+    /// The catalog rescan that verifies a delete. Injectable so the verification phase and
+    /// its cancellation can be tested without a device.
+    typealias VerificationScan = @MainActor (Duration) async throws -> DeviceCatalogSnapshot
     typealias InspectorPreviewRequest = (
         DeviceFileToken,
         Int,
@@ -77,6 +81,10 @@ final class MediaBrowserViewModel: ObservableObject {
     private let importPreflight: ImportPreflight
     private let inspectorPreviewRequest: InspectorPreviewRequest
     private let inspectorPreviewTimeout: Duration
+    private let verificationScan: VerificationScan
+
+    /// Test-only instrumentation proving Retry Verification never resubmits a delete.
+    private(set) var deleteSubmissionCountForTesting = 0
 
     init(
         operationResultStore: OperationResultStore = .applicationSupport(),
@@ -86,7 +94,8 @@ final class MediaBrowserViewModel: ObservableObject {
             ImportDestinationPreflight.inspect(destination: destination, items: items)
         },
         inspectorPreviewTimeout: Duration = .seconds(12),
-        inspectorPreviewRequest: InspectorPreviewRequest? = nil
+        inspectorPreviewRequest: InspectorPreviewRequest? = nil,
+        verificationScan: VerificationScan? = nil
     ) {
         let resolvedGateway = gateway ?? ImageCaptureDeviceGateway()
         self.gateway = resolvedGateway
@@ -94,6 +103,9 @@ final class MediaBrowserViewModel: ObservableObject {
         self.operationResultStore = operationResultStore
         self.importPreflight = importPreflight
         self.inspectorPreviewTimeout = inspectorPreviewTimeout
+        self.verificationScan = verificationScan ?? { timeout in
+            try await resolvedGateway.scan(timeout: timeout)
+        }
         self.inspectorPreviewRequest = inspectorPreviewRequest ?? { token, maxPixelSize, completion in
             Task { @MainActor in
                 let image: NSImage?
@@ -653,6 +665,7 @@ final class MediaBrowserViewModel: ObservableObject {
         operationCancellation = cancellation
         operationProgress = MediaOperationProgress(kind: .deleting, totalItems: snapshot.items.count)
         status = "Deleting \(snapshot.items.count) item(s)..."
+        deleteSubmissionCountForTesting += 1
         Task { [weak self] in
             guard let self else { return }
             do {
@@ -664,7 +677,7 @@ final class MediaBrowserViewModel: ObservableObject {
                         self.applyOperationProgress(update, for: .deleting)
                     }
                 )
-                await self.verifyDelete(snapshot: snapshot, summary: summary)
+                self.beginVerification(snapshot: snapshot, summary: summary)
             } catch {
                 let summary = DeviceGatewayDeleteSummary(failed: snapshot.items.map {
                     DeviceOperationFailure(
@@ -673,7 +686,7 @@ final class MediaBrowserViewModel: ObservableObject {
                         reason: error.localizedDescription
                     )
                 })
-                await self.verifyDelete(snapshot: snapshot, summary: summary)
+                self.beginVerification(snapshot: snapshot, summary: summary)
             }
         }
     }
@@ -683,9 +696,43 @@ final class MediaBrowserViewModel: ObservableObject {
               progress.requestCancellation() else {
             return
         }
+        let phase = progress.phase
         operationProgress = progress
         status = progress.detail
         _ = operationCancellation?.cancel()
+
+        // Cancel must settle the UI within a bounded time even if ImageCaptureCore never
+        // acknowledges. During verification the owning task is canceled directly, which is
+        // what the old code was missing: it signalled only the previous submission's
+        // cancellation object, so the verification scan ran on to its full timeout.
+        if phase == .verifying {
+            verificationTask?.cancel()
+        }
+        startCancellationSettleWatchdog()
+    }
+
+    /// Backstop for a cancel the framework never answers.
+    ///
+    /// The operation is settled as verification-pending rather than as canceled-and-clean,
+    /// because a silent framework leaves the current item genuinely uncertain.
+    private func startCancellationSettleWatchdog() {
+        let generation = operationState.generation
+        Task { @MainActor [weak self] in
+            try? await Task.sleep(for: Self.cancellationSettleBound)
+            guard let self,
+                  self.operationState.isCurrent(generation: generation),
+                  let progress = self.operationProgress,
+                  progress.isCanceling else {
+                return
+            }
+            self.verificationTask?.cancel()
+            self.verificationTask = nil
+            self.activeVerificationID = nil
+            self.operationProgress = nil
+            self.operationCancellation = nil
+            self.operationState.finish()
+            self.status = "Canceled without device acknowledgement. The result is unconfirmed — open Results to retry verification."
+        }
     }
 
     func showOperationHistory() {
@@ -713,11 +760,16 @@ final class MediaBrowserViewModel: ObservableObject {
             return
         }
         status = "Verifying the saved delete audit…"
-        Task { [weak self] in
-            guard let self else { return }
-            let summary = audit.frameworkSummary ?? DeviceGatewayDeleteSummary()
-            await self.verifyDelete(snapshot: audit.snapshot, summary: summary)
-        }
+        // Scan-only by construction: this path never calls `gateway.delete`.
+        operationProgress = MediaOperationProgress(
+            kind: .deleting,
+            totalItems: audit.snapshot.items.count
+        )
+        operationCancellation = DeviceOperationCancellation()
+        beginVerification(
+            snapshot: audit.snapshot,
+            summary: audit.frameworkSummary ?? DeviceGatewayDeleteSummary()
+        )
     }
 
     /// Requests the destructive confirmation sheet. Does not delete anything.
@@ -1086,35 +1138,153 @@ final class MediaBrowserViewModel: ObservableObject {
         operationState.finish()
     }
 
-    private func verifyDelete(
+    /// How long a verification rescan may run before it is abandoned as pending.
+    ///
+    /// Deliberately far below the previous 180 seconds. Verification is a read-only catalog
+    /// rescan whose only honest failure mode is "could not confirm"; making the user wait
+    /// three minutes for that answer, under a label that said `Deleting`, was the defect.
+    static let verificationTimeout: Duration = .seconds(45)
+
+    /// How long the UI waits for the framework to acknowledge a cancellation before it
+    /// settles anyway. The operation is then recorded as verification-pending.
+    static let cancellationSettleBound: Duration = .seconds(3)
+
+    /// The verification task, owned so Cancel can actually stop it. Previously the
+    /// verification scan consumed no cancellation object and its task was never canceled,
+    /// so Cancel changed the label to `Canceling delete…` while the scan ran to its timeout.
+    private var verificationTask: Task<Void, Never>?
+
+    /// Identifies the verification currently allowed to settle the UI.
+    ///
+    /// A canceled task can still run to its next suspension point and arrive at a terminal
+    /// branch after the cancel watchdog has already settled the operation. Without this,
+    /// that late arrival would persist a second audit record for work the user stopped.
+    private var activeVerificationID: UUID?
+
+    /// Whether the framework delete was provably never submitted.
+    ///
+    /// When nothing reached the device there is nothing to verify, so the operation
+    /// finishes promptly and honestly instead of entering a long verification phase.
+    private func wasNeverSubmitted(
         snapshot: DeletePlanSnapshot,
         summary: DeviceGatewayDeleteSummary
-    ) async {
-        do {
-            let catalog = try await gateway.scan(timeout: .seconds(180))
-            let audit = DeleteReconciler.reconcile(
-                snapshot: snapshot,
-                summary: summary,
-                catalog: catalog
-            )
-            let payload = makeScanPayload(catalog)
-            applyScanPayload(payload, preservingImportedDownloads: true)
-            let removed = audit.items.filter { $0.outcome == .confirmedRemoved }.count
-            let unresolved = audit.items.count - removed
-            status = "Delete verified: \(removed) removed, \(unresolved) still present or unresolved."
-            persistOperationResult(makeDeleteRecord(audit: audit))
-        } catch {
-            let audit = DeleteReconciler.unverified(
-                snapshot: snapshot,
-                reason: error.localizedDescription,
-                frameworkSummary: summary
-            )
-            persistOperationResult(makeDeleteRecord(audit: audit))
-            status = "Delete finished, but verification is pending. Open Results to retry verification."
-            operationState.finish()
+    ) -> Bool {
+        guard summary.successful.isEmpty, summary.canceled.isEmpty else { return false }
+        guard summary.failed.count == snapshot.items.count, !summary.failed.isEmpty else {
+            return false
         }
+        let neverSubmitted = DeviceGatewayError.noDevice.localizedDescription
+        return summary.failed.allSatisfy { $0.reason == neverSubmitted }
+    }
+
+    /// Starts post-delete verification. Test seam for the phase and its cancellation.
+    func startDeleteVerificationForTesting(
+        snapshot: DeletePlanSnapshot,
+        summary: DeviceGatewayDeleteSummary
+    ) {
+        if !operationState.isBusy {
+            operationState.begin(.deleting)
+        }
+        if operationProgress == nil {
+            operationProgress = MediaOperationProgress(kind: .deleting, totalItems: snapshot.items.count)
+        }
+        if operationCancellation == nil {
+            operationCancellation = DeviceOperationCancellation()
+        }
+        beginVerification(snapshot: snapshot, summary: summary)
+    }
+
+    /// Runs verification in an owned, cancelable task.
+    private func beginVerification(
+        snapshot: DeletePlanSnapshot,
+        summary: DeviceGatewayDeleteSummary
+    ) {
+        // Nothing reached the device: finish now rather than making the user sit through a
+        // misleading destructive-looking phase for an answer already known.
+        if wasNeverSubmitted(snapshot: snapshot, summary: summary) {
+            finishVerification(
+                audit: DeleteReconciler.unverified(
+                    snapshot: snapshot,
+                    reason: summary.failed.first?.reason
+                        ?? DeviceGatewayError.noDevice.localizedDescription,
+                    frameworkSummary: summary
+                ),
+                status: "Delete was not submitted: \(DeviceGatewayError.noDevice.localizedDescription) Nothing was removed."
+            )
+            return
+        }
+
+        if var progress = operationProgress {
+            progress.beginVerification()
+            operationProgress = progress
+            status = progress.detail
+        }
+
+        verificationTask?.cancel()
+        let verificationID = UUID()
+        activeVerificationID = verificationID
+        verificationTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            do {
+                let catalog = try await self.verificationScan(Self.verificationTimeout)
+                // A cancel that landed while the scan was in flight wins: a catalog fetched
+                // after the user asked to stop must not silently remove rows.
+                try Task.checkCancellation()
+                guard self.activeVerificationID == verificationID else { return }
+                let audit = DeleteReconciler.reconcile(
+                    snapshot: snapshot,
+                    summary: summary,
+                    catalog: catalog
+                )
+                self.applyScanPayload(self.makeScanPayload(catalog), preservingImportedDownloads: true)
+                let removed = audit.items.filter { $0.outcome == .confirmedRemoved }.count
+                let unresolved = audit.items.count - removed
+                self.finishVerification(
+                    audit: audit,
+                    status: "Delete verified: \(removed) removed, \(unresolved) still present or unresolved."
+                )
+            } catch is CancellationError {
+                guard self.activeVerificationID == verificationID else { return }
+                self.finishCanceledVerification(snapshot: snapshot, summary: summary)
+            } catch {
+                guard self.activeVerificationID == verificationID else { return }
+                self.finishVerification(
+                    audit: DeleteReconciler.unverified(
+                        snapshot: snapshot,
+                        reason: error.localizedDescription,
+                        frameworkSummary: summary
+                    ),
+                    status: "Delete finished, but verification is pending. Open Results to retry verification."
+                )
+            }
+        }
+    }
+
+    /// Settles a canceled verification. The requested items keep their rows and are recorded
+    /// as verification-pending: a canceled operation may never claim a removal.
+    private func finishCanceledVerification(
+        snapshot: DeletePlanSnapshot,
+        summary: DeviceGatewayDeleteSummary
+    ) {
+        finishVerification(
+            audit: DeleteReconciler.unverified(
+                snapshot: snapshot,
+                reason: "Verification was canceled before the device catalog could confirm the result.",
+                frameworkSummary: summary
+            ),
+            status: "Verification canceled. The result is unconfirmed — open Results to retry verification."
+        )
+    }
+
+    private func finishVerification(audit: DeleteAudit, status: String) {
+        // Claims the settlement, so a late arrival from the same operation is ignored.
+        activeVerificationID = nil
+        verificationTask = nil
+        persistOperationResult(makeDeleteRecord(audit: audit))
+        self.status = status
         operationProgress = nil
         operationCancellation = nil
+        operationState.finish()
     }
 
     private func makeScanPayload(_ snapshot: DeviceCatalogSnapshot) -> ScanPayload {

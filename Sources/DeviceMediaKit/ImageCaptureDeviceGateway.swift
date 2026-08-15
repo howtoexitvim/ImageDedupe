@@ -39,7 +39,27 @@ public final class ImageCaptureDeviceGateway: NSObject, @preconcurrency ICDevice
     private let openSessionRetryDelay: Duration
     private let browser = ICDeviceBrowser()
 
+    /// The device the browser is currently tracking. Cleared whenever browsing stops.
     private var selectedDevice: ICCameraDevice?
+
+    /// The device later commands run against.
+    ///
+    /// ImageCaptureCore removes the browsed device when the browser stops, and the gateway
+    /// deliberately stops browsing once a catalog arrives. Clearing the command device on
+    /// that removal is what made a normal Delete report `No unlocked iPhone is available.`
+    /// while Download still worked from its retained `ICCameraFile`. The successful session
+    /// is therefore kept here and refreshed only when a new full scan runs.
+    private var commandDevice: ICCameraDevice?
+
+    /// True once the gateway has stopped the browser itself, so the removal callbacks that
+    /// follow are expected bookkeeping rather than a physical disconnect.
+    ///
+    /// Deliberately not a short timing window: ImageCaptureCore may deliver the removal
+    /// well after `stop()` returns, and a window that had already closed would clear the
+    /// command device and reintroduce the very bug this fixes. The flag is instead reset
+    /// when browsing next starts.
+    private var hasStoppedBrowserDeliberately = false
+
     private var catalogGeneration: UUID?
     private var filesByToken: [DeviceFileToken: ICCameraFile] = [:]
     private var filenamesByToken: [DeviceFileToken: String] = [:]
@@ -69,8 +89,8 @@ public final class ImageCaptureDeviceGateway: NSObject, @preconcurrency ICDevice
         if let previousGeneration = catalogGeneration {
             await scheduler.cancelQueued(generation: previousGeneration)
         }
-        stopBrowsing()
-        selectedDevice = nil
+        // A new full scan is the one place the previous session is deliberately discarded.
+        refreshDeviceSession()
         filesByToken.removeAll(keepingCapacity: true)
         filenamesByToken.removeAll(keepingCapacity: true)
         catalogGeneration = nil
@@ -98,6 +118,8 @@ public final class ImageCaptureDeviceGateway: NSObject, @preconcurrency ICDevice
                 }
             ) { token in
                 self.scanCallbackToken = token
+                // Browsing is live again, so removals once more mean a real disconnect.
+                self.hasStoppedBrowserDeliberately = false
                 self.browser.start()
             }
             stopBrowsing()
@@ -288,6 +310,21 @@ public final class ImageCaptureDeviceGateway: NSObject, @preconcurrency ICDevice
         let lease = try await scheduler.acquire(priority: .high, generation: tokens.first?.generation)
         defer { Task { await scheduler.release(lease) } }
         var summary = DeviceGatewayDeleteSummary()
+
+        // Fail the whole batch up front when nothing can be submitted, rather than letting
+        // each item wait on the framework. Nothing reached the device, so the caller can
+        // report an honest, immediate failure instead of a long destructive-looking phase.
+        guard commandDevice != nil else {
+            summary.failed = tokens.map { token in
+                DeviceOperationFailure(
+                    token: token,
+                    filename: filenamesByToken[token] ?? token.fingerprint.name,
+                    reason: DeviceGatewayError.noDevice.localizedDescription
+                )
+            }
+            return summary
+        }
+
         let total = tokens.count
         onProgress?(DeviceBatchProgress(
             completedItems: 0,
@@ -356,14 +393,13 @@ public final class ImageCaptureDeviceGateway: NSObject, @preconcurrency ICDevice
             return
         }
         selectedDevice = camera
+        commandDevice = camera
         camera.delegate = self
         requestOpenSession(on: camera)
     }
 
     public func deviceBrowser(_ browser: ICDeviceBrowser, didRemove device: ICDevice, moreGoing: Bool) {
-        guard selectedDevice === device else { return }
-        selectedDevice = nil
-        finishScan(.failure(.failed("The iPhone was disconnected while scanning.")))
+        handleRemoval(of: device)
     }
 
     public func device(_ device: ICDevice, didOpenSessionWithError error: Error?) {
@@ -393,15 +429,44 @@ public final class ImageCaptureDeviceGateway: NSObject, @preconcurrency ICDevice
     }
 
     public func device(_ device: ICDevice, didCloseSessionWithError error: Error?) {
-        guard device === selectedDevice, let scanAbortError else { return }
-        self.scanAbortError = nil
-        finishScan(.failure(scanAbortError))
+        // `abortScan` stops browsing before requesting the close, so the aborting device is
+        // no longer the browsed one by the time this lands. Matching only `selectedDevice`
+        // here would leave the abort waiting for a callback that can never match.
+        guard scanAbortError != nil else { return }
+        let abortError = scanAbortError
+        scanAbortError = nil
+        if let abortError {
+            finishScan(.failure(abortError))
+        }
     }
 
     public func didRemove(_ device: ICDevice) {
-        guard selectedDevice === device else { return }
-        selectedDevice = nil
-        finishScan(.failure(.failed("The iPhone was disconnected while scanning.")))
+        handleRemoval(of: device)
+    }
+
+    /// Distinguishes the removal that follows a deliberate browser stop from a real
+    /// disconnect, and ignores late removals for a device a newer scan has superseded.
+    private func handleRemoval(of device: ICDevice) {
+        let wasBrowsedDevice = selectedDevice === device
+        if wasBrowsedDevice {
+            selectedDevice = nil
+        }
+
+        guard commandDevice === device else {
+            // A late callback for a superseded device must not disturb the current session.
+            return
+        }
+
+        if hasStoppedBrowserDeliberately {
+            // ImageCaptureCore always removes the browsed device when the browser stops.
+            // The session stays usable for a later Delete.
+            return
+        }
+
+        commandDevice = nil
+        if wasBrowsedDevice {
+            finishScan(.failure(.failed("The iPhone was disconnected while scanning.")))
+        }
     }
 
     public func deviceDidBecomeReady(withCompleteContentCatalog device: ICCameraDevice) {
@@ -542,7 +607,7 @@ public final class ImageCaptureDeviceGateway: NSObject, @preconcurrency ICDevice
         cancellation: DeviceOperationCancellation?,
         timeout: Duration
     ) async throws {
-        guard let device = selectedDevice else {
+        guard let device = commandDevice else {
             throw DeviceGatewayError.noDevice
         }
         let file = try resolveFile(for: token)
@@ -611,14 +676,18 @@ public final class ImageCaptureDeviceGateway: NSObject, @preconcurrency ICDevice
 
     private func abortScan(with error: DeviceCallbackError) {
         cancelOpenSessionRetry()
+        // Read the device before stopping: `stopBrowsing` clears the browsed binding. An
+        // aborted scan produced no trustworthy catalog, so its session is discarded too.
+        let abortingDevice = selectedDevice ?? commandDevice
         stopBrowsing()
-        guard let selectedDevice else {
+        commandDevice = nil
+        guard let abortingDevice else {
             finishScan(.failure(error))
             return
         }
         scanAbortError = error
-        if selectedDevice.hasOpenSession {
-            selectedDevice.requestCloseSession()
+        if abortingDevice.hasOpenSession {
+            abortingDevice.requestCloseSession()
         }
     }
 
@@ -626,8 +695,42 @@ public final class ImageCaptureDeviceGateway: NSObject, @preconcurrency ICDevice
         activeFrameworkProgress?.cancel()
     }
 
+    /// Stops browsing without discarding the command session.
+    ///
+    /// The removal callbacks ImageCaptureCore delivers during and just after `stop()` are
+    /// flagged as deliberate so they cannot clear `commandDevice`. The flag is cleared on
+    /// the next main-actor turn, after the framework has drained those callbacks, so a real
+    /// disconnect arriving later is still handled as a disconnect.
     private func stopBrowsing() {
+        hasStoppedBrowserDeliberately = true
         browser.stop()
+        selectedDevice = nil
+    }
+
+    /// Discards the retained session so a new full scan starts from a clean device binding.
+    private func refreshDeviceSession() {
+        stopBrowsing()
+        commandDevice = nil
+    }
+
+    // MARK: - Test seams
+    //
+    // The device-session lifecycle is only observable through ImageCaptureCore callbacks,
+    // so these expose the binding without reaching into the framework.
+
+    /// Whether a device is available for a later Download or Delete.
+    public var hasCommandDeviceForTesting: Bool { commandDevice != nil }
+
+    public func isCommandDeviceForTesting(_ device: ICDevice) -> Bool {
+        commandDevice === device
+    }
+
+    public func stopBrowsingForTesting() {
+        stopBrowsing()
+    }
+
+    public func refreshDeviceSessionForTesting() {
+        refreshDeviceSession()
     }
 
     private func mapCallbackError(_ error: Error, operation: String) -> DeviceGatewayError {

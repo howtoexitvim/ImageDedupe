@@ -274,10 +274,9 @@ struct MediaBrowserView: View {
                     .accessibilityLabel(progress.kind == .importing ? "Import progress" : "Delete progress")
                     .accessibilityValue("\(progress.completedItems) of \(progress.totalItems)")
                 Text(progress.detail)
-                    .lineLimit(1)
-                    .layoutPriority(1)
-                    .help(progress.detail)
-                    .accessibilityLabel("Operation status: \(progress.detail)")
+                    .mediaStatusBarText(
+                        MediaStatusBarText(message: progress.detail, prefix: "Operation status")
+                    )
                 Button(progress.isCanceling ? "Canceling…" : "Cancel") {
                     viewModel.cancelCurrentOperation()
                 }
@@ -286,10 +285,7 @@ struct MediaBrowserView: View {
                 .accessibilityHint("Stops after the device acknowledges cancellation")
             } else {
                 Text(viewModel.status)
-                    .lineLimit(1)
-                    .layoutPriority(1)
-                    .help(viewModel.status)
-                    .accessibilityLabel("Status: \(viewModel.status)")
+                    .mediaStatusBarText(MediaStatusBarText(message: viewModel.status))
             }
             Spacer()
             Text("\(viewModel.selectedActionIDs.count) selected")
