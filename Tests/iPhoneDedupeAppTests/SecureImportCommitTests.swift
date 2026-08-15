@@ -100,37 +100,117 @@ final class SecureImportCommitTests: XCTestCase {
         XCTAssertEqual((attributes[.posixPermissions] as? NSNumber)?.intValue, 0o600)
     }
 
-    func testCommitNeverOverwritesExistingDestinationFile() throws {
+    /// The default resolution never destroys the existing file: it lands alongside under a
+    /// numbered name, the way Finder does.
+    ///
+    /// This replaces an earlier test asserting that the commit simply *failed* here.
+    /// Refusing was a dead end for the case this app is built around — a duplicate group's
+    /// copies share a name, so the second download always collided and the user was shown a
+    /// POSIX error with no way forward.
+    func testKeepBothLandsAlongsideWithoutTouchingTheExistingFile() throws {
+        let fixture = try makeCollisionFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+
+        let output = try DestinationCommitter.commit(
+            stagedFilename: fixture.staging.lastPathComponent,
+            stagingDirectory: fixture.stagingDirectory,
+            stagingIdentity: fixture.stagingIdentity,
+            stagedIdentity: fixture.stagedIdentity,
+            filename: fixture.existing.lastPathComponent,
+            destination: fixture.destination,
+            destinationIdentity: fixture.destinationIdentity,
+            onConflict: .keepBoth
+        )
+
+        XCTAssertEqual(output.lastPathComponent, "IMG_0001 2.HEIC")
+        XCTAssertEqual(try Data(contentsOf: output), Data("new".utf8))
+        // The property that must never regress: the original is untouched.
+        XCTAssertEqual(try Data(contentsOf: fixture.existing), Data("old".utf8))
+    }
+
+    /// Replacing is destructive, and happens only because the user chose it for this exact
+    /// conflict.
+    func testReplaceOverwritesOnlyWhenExplicitlyChosen() throws {
+        let fixture = try makeCollisionFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+
+        let output = try DestinationCommitter.commit(
+            stagedFilename: fixture.staging.lastPathComponent,
+            stagingDirectory: fixture.stagingDirectory,
+            stagingIdentity: fixture.stagingIdentity,
+            stagedIdentity: fixture.stagedIdentity,
+            filename: fixture.existing.lastPathComponent,
+            destination: fixture.destination,
+            destinationIdentity: fixture.destinationIdentity,
+            onConflict: .replace
+        )
+
+        XCTAssertEqual(output.lastPathComponent, "IMG_0001.HEIC")
+        XCTAssertEqual(try Data(contentsOf: output), Data("new".utf8))
+    }
+
+    /// Skipping reports the conflict rather than writing, so the caller can record it
+    /// against that file instead of failing the batch.
+    func testSkipReportsTheConflictAndLeavesBothFilesAlone() throws {
+        let fixture = try makeCollisionFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+
+        XCTAssertThrowsError(try DestinationCommitter.commit(
+            stagedFilename: fixture.staging.lastPathComponent,
+            stagingDirectory: fixture.stagingDirectory,
+            stagingIdentity: fixture.stagingIdentity,
+            stagedIdentity: fixture.stagedIdentity,
+            filename: fixture.existing.lastPathComponent,
+            destination: fixture.destination,
+            destinationIdentity: fixture.destinationIdentity,
+            onConflict: .skip
+        )) { error in
+            XCTAssertEqual(
+                error as? DestinationCommitError,
+                .filenameConflict("IMG_0001.HEIC")
+            )
+        }
+        XCTAssertEqual(try Data(contentsOf: fixture.existing), Data("old".utf8))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: fixture.staging.path))
+    }
+
+    private struct CollisionFixture {
+        let root: URL
+        let staging: URL
+        let stagingDirectory: URL
+        let stagingIdentity: ImportDestinationIdentity
+        let stagedIdentity: StagedFileIdentity
+        let destination: URL
+        let destinationIdentity: ImportDestinationIdentity
+        let existing: URL
+    }
+
+    /// A staged file whose name is already taken at the destination.
+    private func makeCollisionFixture() throws -> CollisionFixture {
         let root = try makeTemporaryDirectory()
-        defer { try? FileManager.default.removeItem(at: root) }
         let staging = root.appendingPathComponent("staged")
         let destination = root.appendingPathComponent("destination", isDirectory: true)
         try FileManager.default.createDirectory(at: destination, withIntermediateDirectories: false)
         try Data("new".utf8).write(to: staging)
         let existing = destination.appendingPathComponent("IMG_0001.HEIC")
         try Data("old".utf8).write(to: existing)
-        let identity = try ImportDestinationIdentity.capture(destination: destination)
+
         let stagingDirectory = staging.deletingLastPathComponent()
         let stagingIdentity = try ImportDestinationIdentity.capture(destination: stagingDirectory)
-        let stagedIdentity = try StagedFileIdentity.capture(
-            filename: staging.lastPathComponent,
-            stagingDirectory: stagingDirectory,
-            stagingIdentity: stagingIdentity
-        )
-
-        XCTAssertThrowsError(try DestinationCommitter.commit(
-            stagedFilename: staging.lastPathComponent,
+        return CollisionFixture(
+            root: root,
+            staging: staging,
             stagingDirectory: stagingDirectory,
             stagingIdentity: stagingIdentity,
-            stagedIdentity: stagedIdentity,
-            filename: existing.lastPathComponent,
+            stagedIdentity: try StagedFileIdentity.capture(
+                filename: staging.lastPathComponent,
+                stagingDirectory: stagingDirectory,
+                stagingIdentity: stagingIdentity
+            ),
             destination: destination,
-            destinationIdentity: identity
-        )) { error in
-            XCTAssertEqual(error as? DestinationCommitError, .collision)
-        }
-        XCTAssertEqual(try Data(contentsOf: existing), Data("old".utf8))
-        XCTAssertTrue(FileManager.default.fileExists(atPath: staging.path))
+            destinationIdentity: try ImportDestinationIdentity.capture(destination: destination),
+            existing: existing
+        )
     }
 
     func testCommitRejectsReplacementStagingDirectoryAtTheSamePath() throws {

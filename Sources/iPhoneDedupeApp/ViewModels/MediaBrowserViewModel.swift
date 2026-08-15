@@ -56,6 +56,33 @@ final class MediaBrowserViewModel: ObservableObject {
     /// Set when a renderer asks for the destructive confirmation sheet. The delete itself
     /// still only runs from the confirmed action, never from this flag.
     @Published var isConfirmingDelete = false
+
+    /// A download that needs the user to decide what to do about an existing file.
+    ///
+    /// Downloading a duplicate group makes this routine, not exceptional: the copies share a
+    /// name, so the second always lands on the first. The app asks rather than choosing,
+    /// because overwriting destroys and skipping silently loses a file the user asked for.
+    @Published var pendingImportConflict: ImportConflict?
+
+    struct ImportConflict: Identifiable, Equatable {
+        let id = UUID()
+        let filename: String
+        /// How many files are still waiting behind this one, so "apply to all" can say what
+        /// it will cover.
+        let remainingCount: Int
+
+        static func == (lhs: ImportConflict, rhs: ImportConflict) -> Bool {
+            lhs.id == rhs.id
+        }
+    }
+
+    /// A resolution the user asked to reuse for the rest of this import.
+    ///
+    /// Deliberately not persisted across imports: "apply to all" answers the batch in front
+    /// of the user, and silently replacing files in a later session because of a tick box
+    /// from an earlier one would be indefensible.
+    private var importConflictResolutionForBatch: ImportConflictResolution?
+    private var importConflictContinuation: CheckedContinuation<ImportConflictResolution?, Never>?
     @Published private(set) var pendingDeleteSnapshot: DeletePlanSnapshot?
 
     /// Actionable guidance for the most recent device failure, or `nil` when the last
@@ -763,8 +790,32 @@ final class MediaBrowserViewModel: ObservableObject {
             // definition of the fingerprint, so this is only used to recover a display name.
             let itemByToken = Dictionary(items.map { ($0.token, $0) }, uniquingKeysWith: { first, _ in first })
             var committed: [DeviceDownloadSuccess] = []
-            for download in summary.successful {
+            var wasCanceledAtConflict = false
+
+            for (index, download) in summary.successful.enumerated() {
+                if wasCanceledAtConflict {
+                    summary.canceled.append(download.token)
+                    continue
+                }
                 let targetName = itemByToken[download.token]?.model.name ?? download.filename
+
+                // Ask before landing on an existing name, unless the user already chose for
+                // the batch. A duplicate group collides on every copy after the first, so
+                // this is the ordinary path rather than an error.
+                var resolution = ImportConflictResolution.keepBoth
+                if self.destinationContains(targetName, in: destination) {
+                    guard let chosen = await self.resolutionForConflict(
+                        filename: targetName,
+                        remaining: summary.successful.count - index - 1
+                    ) else {
+                        // The user cancelled the import from the prompt.
+                        wasCanceledAtConflict = true
+                        summary.canceled.append(download.token)
+                        continue
+                    }
+                    resolution = chosen
+                }
+
                 do {
                     let output = try DestinationCommitter.commit(
                         stagedFilename: download.filename,
@@ -773,7 +824,8 @@ final class MediaBrowserViewModel: ObservableObject {
                         stagedIdentity: download.stagedIdentity,
                         filename: targetName,
                         destination: destination,
-                        destinationIdentity: destinationIdentity
+                        destinationIdentity: destinationIdentity,
+                        onConflict: resolution
                     )
                     committed.append(DeviceDownloadSuccess(
                         token: download.token,
@@ -789,6 +841,8 @@ final class MediaBrowserViewModel: ObservableObject {
                 }
             }
             summary.successful = committed
+            // The choice covers this import only; the next one asks again.
+            self.importConflictResolutionForBatch = nil
             self.applyImportSummary(summary, destination: destination, requestedItems: items)
         }
     }
@@ -1034,6 +1088,50 @@ final class MediaBrowserViewModel: ObservableObject {
     /// testable without a device.
     func itemsByTokenForTesting() -> [DeviceFileToken: MediaItem] {
         Dictionary(allItems.map { ($0.token, $0) }, uniquingKeysWith: { first, _ in first })
+    }
+
+    /// Whether the destination already holds this filename, matched the way the filesystem
+    /// will match it when the commit publishes.
+    private func destinationContains(_ filename: String, in destination: URL) -> Bool {
+        FileManager.default.fileExists(
+            atPath: destination.appendingPathComponent(filename).path
+        )
+    }
+
+    /// Answers the visible conflict prompt.
+    ///
+    /// - Parameter applyToAll: reuse this choice for the remaining files in this import only.
+    func resolveImportConflict(
+        _ resolution: ImportConflictResolution,
+        applyToAll: Bool
+    ) {
+        if applyToAll {
+            importConflictResolutionForBatch = resolution
+        }
+        pendingImportConflict = nil
+        importConflictContinuation?.resume(returning: resolution)
+        importConflictContinuation = nil
+    }
+
+    /// Cancels the whole import from the conflict prompt.
+    func cancelImportFromConflict() {
+        pendingImportConflict = nil
+        importConflictContinuation?.resume(returning: nil)
+        importConflictContinuation = nil
+    }
+
+    /// The resolution to use for `filename`, asking the user unless they chose "apply to all".
+    private func resolutionForConflict(
+        filename: String,
+        remaining: Int
+    ) async -> ImportConflictResolution? {
+        if let importConflictResolutionForBatch {
+            return importConflictResolutionForBatch
+        }
+        return await withCheckedContinuation { continuation in
+            importConflictContinuation = continuation
+            pendingImportConflict = ImportConflict(filename: filename, remainingCount: remaining)
+        }
     }
 
     func recomputeDuplicatePlanForTesting() {

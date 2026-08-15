@@ -85,6 +85,18 @@ struct MediaBrowserView: View {
             panePreferences.reset()
             columnVisibility = .all
         }
+        // A download landing on an existing name. Presented as a choice rather than an
+        // error, because downloading a duplicate group collides on every copy after the
+        // first, and that is the case the app exists for.
+        .sheet(item: $viewModel.pendingImportConflict) { conflict in
+            ImportConflictSheet(
+                conflict: conflict,
+                onResolve: { resolution, applyToAll in
+                    viewModel.resolveImportConflict(resolution, applyToAll: applyToAll)
+                },
+                onCancel: { viewModel.cancelImportFromConflict() }
+            )
+        }
         .sheet(isPresented: $viewModel.isShowingOperationHistory) {
             OperationHistoryView(
                 records: viewModel.operationHistory,

@@ -9,6 +9,10 @@ public enum DestinationCommitError: Error, Equatable, LocalizedError, Sendable {
     case stagedFileInvalid
     case insufficientSpace(requiredBytes: Int64, availableBytes: Int64)
     case collision
+    /// A file of this name is already at the destination, and the chosen resolution does
+    /// not replace it. Distinct from `io` so the caller can offer the choice again rather
+    /// than surfacing a POSIX message.
+    case filenameConflict(String)
     case io(String)
 
     public var errorDescription: String? {
@@ -25,6 +29,8 @@ public enum DestinationCommitError: Error, Equatable, LocalizedError, Sendable {
             return "The staged download is missing, a symbolic link, or not a regular file."
         case .insufficientSpace(let requiredBytes, let availableBytes):
             return "The destination no longer has enough free space (needs \(requiredBytes) bytes, has \(availableBytes) bytes)."
+        case .filenameConflict(let name):
+            return "\(name) already exists at the destination."
         case .collision:
             return "A file with this name already exists. Nothing was overwritten."
         case .io(let message):
@@ -88,7 +94,8 @@ public enum DestinationCommitter {
         stagedIdentity: StagedFileIdentity,
         filename: String,
         destination: URL,
-        destinationIdentity: ImportDestinationIdentity
+        destinationIdentity: ImportDestinationIdentity,
+        onConflict: ImportConflictResolution = .keepBoth
     ) throws -> URL {
         guard isSafeLastPathComponent(stagedFilename), isSafeLastPathComponent(filename) else {
             throw DestinationCommitError.unsafeFilename
@@ -166,18 +173,41 @@ public enum DestinationCommitter {
             throw posixError(defaultError: .io("Could not flush the staged download."))
         }
 
+        // Publishing a name that already exists is the normal case when downloading a
+        // duplicate group, since its copies share a name. `RENAME_EXCL` still guards every
+        // publish; what changes is which name is published, and whether replacing is allowed.
+        let publishedName: String
+        switch onConflict {
+        case .keepBoth:
+            // Finder's behaviour: land alongside under a numbered name, losing nothing.
+            publishedName = ImportFilenameDisambiguator.uniqueFilename(for: filename) { candidate in
+                candidate.withCString { faccessat(destinationFD, $0, F_OK, AT_SYMLINK_NOFOLLOW) == 0 }
+            }
+        case .replace, .skip:
+            publishedName = filename
+        }
+
+        // `.replace` is the one path allowed to destroy something, and only because the user
+        // chose it for this exact conflict.
+        let renameFlags = onConflict == .replace ? UInt32(0) : UInt32(RENAME_EXCL)
         let renameResult = temporaryName.withCString { temporaryPointer in
-            filename.withCString { filenamePointer in
+            publishedName.withCString { filenamePointer in
                 renameatx_np(
                     destinationFD,
                     temporaryPointer,
                     destinationFD,
                     filenamePointer,
-                    UInt32(RENAME_EXCL)
+                    renameFlags
                 )
             }
         }
         guard renameResult == 0 else {
+            // EEXIST here means the destination gained the file after the choice was made.
+            // Reported as a conflict rather than a POSIX failure, so the caller can ask
+            // again instead of showing "Could not publish the downloaded file".
+            if errno == EEXIST {
+                throw DestinationCommitError.filenameConflict(publishedName)
+            }
             throw posixError(defaultError: .io("Could not publish the downloaded file."))
         }
         temporaryExists = false
@@ -189,7 +219,7 @@ public enum DestinationCommitter {
         guard unlinkResult == 0 else {
             throw posixError(defaultError: .io("The download was committed but staging cleanup failed."))
         }
-        return destination.appendingPathComponent(filename, isDirectory: false)
+        return destination.appendingPathComponent(publishedName, isDirectory: false)
     }
 
     private static func copyAll(from sourceFD: Int32, to destinationFD: Int32) throws {
