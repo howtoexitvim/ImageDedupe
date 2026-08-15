@@ -72,6 +72,40 @@ public struct ImportStagingManager: Sendable {
         }
     }
 
+    /// Re-opens a staging session created by another process, for the device helper.
+    ///
+    /// The helper is told where to stage rather than choosing for itself, so the app keeps
+    /// ownership of the destination and commit steps. That makes this an input from
+    /// outside the process, and it is therefore **validated rather than trusted**: the
+    /// directory must sit directly inside this manager's root, must be a real directory
+    /// rather than a symbolic link, and must already carry the staging marker. Without
+    /// those checks an unexpected path could redirect downloaded bytes somewhere the user
+    /// never nominated.
+    public func adoptSession(
+        at directory: URL,
+        fileManager: FileManager = .default
+    ) throws -> ImportStagingSession {
+        let standardized = directory.standardizedFileURL
+        guard standardized.deletingLastPathComponent().standardizedFileURL == rootDirectory else {
+            throw ImportStagingError.filesystem(
+                "The staging directory is outside this application's staging root."
+            )
+        }
+
+        let values = try? standardized.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey])
+        guard values?.isDirectory == true, values?.isSymbolicLink != true else {
+            throw ImportStagingError.filesystem("The staging path is not a directory.")
+        }
+
+        let marker = standardized.appendingPathComponent(Self.markerFilename, isDirectory: false)
+        guard fileManager.fileExists(atPath: marker.path) else {
+            throw ImportStagingError.filesystem("The staging directory has no staging marker.")
+        }
+
+        let identity = try ImportDestinationIdentity.capture(destination: standardized)
+        return ImportStagingSession(directory: standardized, markerURL: marker, identity: identity)
+    }
+
     public func cleanup(_ session: ImportStagingSession, fileManager: FileManager = .default) throws {
         try cleanupDirectory(session.directory, fileManager: fileManager)
     }

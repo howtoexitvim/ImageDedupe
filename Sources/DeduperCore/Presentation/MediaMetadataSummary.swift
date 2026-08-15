@@ -1,6 +1,6 @@
 import Foundation
 
-public struct MediaMetadataSummary: Equatable, Sendable {
+public struct MediaMetadataSummary: Equatable, Codable, Sendable {
     public let location: String?
     public let aperture: String?
     public let colorSpace: String?
