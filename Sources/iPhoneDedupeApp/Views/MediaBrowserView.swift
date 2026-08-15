@@ -5,6 +5,8 @@ import SwiftUI
 struct MediaBrowserView: View {
     @StateObject private var viewModel = MediaBrowserViewModel()
     @State private var sidebarSelection: SidebarItem = .allMedia
+    @State private var columnVisibility = NavigationSplitViewVisibility.all
+    private let panePreferences = MediaPanePreferences()
     private let autoScanOnLaunch: Bool
 
     private enum SidebarItem: String, Hashable {
@@ -17,44 +19,66 @@ struct MediaBrowserView: View {
         self.autoScanOnLaunch = autoScanOnLaunch
     }
 
+    /// Native split view.
+    ///
+    /// The toolbar is hosted by the window rather than by the center column. That is the
+    /// structural fix for the toolbar overlapping the sidebar: it now spans the full window
+    /// width above the split view and does not compete with pane geometry. The previous
+    /// composition drew the toolbar inside the center `VStack` with `zIndex(2)` while the
+    /// sidebar was a fixed-width sibling in an `HStack`, which produced the visible seam.
     var body: some View {
-        HStack(spacing: 0) {
+        NavigationSplitView(columnVisibility: $columnVisibility) {
             sidebar
-                .frame(width: 220)
-            Divider()
-            VStack(spacing: 0) {
-                toolbar
-                    .frame(height: 52)
-                    .zIndex(2)
-                Divider()
-                mediaContent
-                Divider()
-                statusBar
-            }
-            .frame(minWidth: 400, maxWidth: .infinity, maxHeight: .infinity)
-            if viewModel.isInspectorVisible {
-                Divider()
-                InspectorView(viewModel: viewModel)
-                    .frame(width: 300)
-                    .frame(maxHeight: .infinity)
+                .navigationSplitViewColumnWidth(
+                    min: MediaPane.sidebar.minimumWidth,
+                    ideal: paneWidth(.sidebar),
+                    max: MediaPane.sidebar.maximumWidth
+                )
+        } detail: {
+            HStack(spacing: 0) {
+                VStack(spacing: 0) {
+                    mediaContent
+                    Divider()
+                    statusBar
+                }
+                .frame(minWidth: MediaPaneLayout.minimumCenterWidth, maxWidth: .infinity, maxHeight: .infinity)
+
+                if viewModel.isInspectorVisible {
+                    Divider()
+                    InspectorView(viewModel: viewModel)
+                        .frame(
+                            minWidth: MediaPane.inspector.minimumWidth,
+                            idealWidth: paneWidth(.inspector),
+                            maxWidth: MediaPane.inspector.maximumWidth,
+                            maxHeight: .infinity
+                        )
+                }
             }
         }
+        .navigationSplitViewStyle(.balanced)
+        .toolbar { toolbarContent }
         .task {
             if autoScanOnLaunch {
                 viewModel.scan()
             }
         }
+        .onReceive(NotificationCenter.default.publisher(for: .mediaResetLayout)) { _ in
+            panePreferences.reset()
+            columnVisibility = .all
+        }
+    }
+
+    private func paneWidth(_ pane: MediaPane) -> CGFloat {
+        panePreferences.width(for: pane)
     }
 
     @ViewBuilder
     private var mediaContent: some View {
         if viewModel.viewMode == .list {
             MediaListView(viewModel: viewModel)
-                .zIndex(0)
                 .clipped()
         } else {
             MediaGridView(viewModel: viewModel)
-                .zIndex(0)
                 .clipped()
         }
     }
@@ -100,18 +124,11 @@ struct MediaBrowserView: View {
         }
     }
 
-    private var toolbar: some View {
-        HStack(spacing: 12) {
-            Button {
-                viewModel.toggleInspector()
-            } label: {
-                Image(systemName: "sidebar.right")
-            }
-            .buttonStyle(.borderless)
-            .help(viewModel.isInspectorVisible ? "Hide inspector" : "Show inspector")
-
-            Divider().frame(height: 24)
-
+    /// Window-hosted toolbar. Living in the titlebar area is what keeps it from overlapping
+    /// the sidebar; it must not be reintroduced into the center column.
+    @ToolbarContentBuilder
+    private var toolbarContent: some ToolbarContent {
+        ToolbarItem(placement: .navigation) {
             Picker(
                 "View",
                 selection: Binding(
@@ -126,9 +143,9 @@ struct MediaBrowserView: View {
             .labelsHidden()
             .frame(width: 132)
             .help("View mode")
+        }
 
-            Spacer(minLength: 12)
-
+        ToolbarItem(placement: .principal) {
             NativeSearchField(
                 text: $viewModel.searchText,
                 placeholder: "name, kind:heic, size:>2mb, duration:<10s",
@@ -138,29 +155,34 @@ struct MediaBrowserView: View {
                 }
             )
             .frame(height: 28)
-            .frame(minWidth: 260, idealWidth: 420, maxWidth: 520)
+            .frame(minWidth: 220, idealWidth: 360, maxWidth: 520)
             .help("Smart search: plain text or tokens like kind:heic size:>2mb duration:<10s")
-
-            Divider().frame(height: 24)
-
-            Image(systemName: "photo")
-                .foregroundStyle(.secondary)
-            Slider(
-                value: Binding(
-                    get: { viewModel.displayScale.value },
-                    set: { viewModel.setDisplayScale($0) }
-                ),
-                in: 0.75...1.6
-            )
-            .frame(width: 120)
-            .help("Thumbnail size")
-            Image(systemName: "photo.fill")
-                .foregroundStyle(.secondary)
         }
-        .font(.callout)
-        .controlSize(.regular)
-        .padding(.horizontal, 12)
-        .background(Color(nsColor: .windowBackgroundColor))
+
+        ToolbarItemGroup(placement: .primaryAction) {
+            HStack(spacing: 6) {
+                Image(systemName: "photo")
+                    .foregroundStyle(.secondary)
+                Slider(
+                    value: Binding(
+                        get: { viewModel.displayScale.value },
+                        set: { viewModel.setDisplayScale($0) }
+                    ),
+                    in: 0.75...1.6
+                )
+                .frame(width: 110)
+                .help("Thumbnail size")
+                Image(systemName: "photo.fill")
+                    .foregroundStyle(.secondary)
+            }
+
+            Button {
+                viewModel.toggleInspector()
+            } label: {
+                Image(systemName: "sidebar.right")
+            }
+            .help(viewModel.isInspectorVisible ? "Hide inspector" : "Show inspector")
+        }
     }
 
     private var statusBar: some View {
