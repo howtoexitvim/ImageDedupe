@@ -64,9 +64,17 @@ final class MediaBrowserViewModel: ObservableObject {
     @Published private(set) var operationHistoryWarning: String?
     @Published var isShowingOperationHistory = false
     private let operationResultStore: OperationResultStore
+    typealias ImportPreflight = (URL, [ImportDestinationPreflight.Item]) -> ImportDestinationPreflight.Outcome
+    private let importPreflight: ImportPreflight
 
-    init(operationResultStore: OperationResultStore = .applicationSupport()) {
+    init(
+        operationResultStore: OperationResultStore = .applicationSupport(),
+        importPreflight: @escaping ImportPreflight = { destination, items in
+            ImportDestinationPreflight.inspect(destination: destination, items: items)
+        }
+    ) {
         self.operationResultStore = operationResultStore
+        self.importPreflight = importPreflight
         let loaded = operationResultStore.load()
         operationHistory = loaded.records
         operationHistoryWarning = loaded.warning
@@ -475,6 +483,17 @@ final class MediaBrowserViewModel: ObservableObject {
         let items = selectedActionItems
         guard !items.isEmpty else {
             status = "Select one or more items to import."
+            return
+        }
+        guard !operationState.isBusy else {
+            status = "\(operationState.current.verb) already in progress."
+            return
+        }
+        let preflightItems = items.map {
+            ImportDestinationPreflight.Item(filename: $0.model.name, size: $0.model.size)
+        }
+        if case let .blocked(failure) = importPreflight(importDestination, preflightItems) {
+            status = "Import blocked: \(failure.message)"
             return
         }
         // Previously unguarded: a second Import, or an Import during a Delete, would both

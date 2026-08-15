@@ -43,6 +43,25 @@ final class OperationGateTests: XCTestCase {
         XCTAssertEqual(viewModel.status, "Select one or more items to import.")
     }
 
+    func testFailedImportPreflightDoesNotClaimTheOperationGate() {
+        let historyURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("unused-history-\(UUID().uuidString).json")
+        let viewModel = MediaBrowserViewModel(
+            operationResultStore: OperationResultStore(fileURL: historyURL),
+            importPreflight: { _, _ in .blocked(.notWritable) }
+        )
+        let selectedItem = item("a")
+        viewModel.allItems = [selectedItem]
+        viewModel.refreshVisibleOrder()
+        viewModel.toggleActionSelection(selectedItem)
+
+        viewModel.importSelected()
+
+        XCTAssertFalse(viewModel.isDeviceBusy)
+        XCTAssertNil(viewModel.operationProgress)
+        XCTAssertEqual(viewModel.status, "Import blocked: The destination folder is not writable.")
+    }
+
     func testDeleteWithNoSelectionIsRejectedWithoutClaimingTheGate() {
         let viewModel = viewModel()
         viewModel.deleteSelected()
