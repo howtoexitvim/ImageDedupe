@@ -75,7 +75,11 @@ struct OperationHistoryView: View {
                                 }
                                 .accessibilityElement(children: .combine)
                             }
-                            if audit.verificationState == .pending {
+                            // Hidden while a rescan can only replay the session's stale
+                            // catalog: retrying would re-list already-deleted files and put
+                            // their rows back. See `docs/todo.md` P0-1.
+                            if audit.verificationState == .pending,
+                               MediaBrowserViewModel.verifiesDeletesAutomatically {
                                 Button("Retry Verification") {
                                     onRetryVerification(record.id)
                                 }

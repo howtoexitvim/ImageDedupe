@@ -757,6 +757,13 @@ final class MediaBrowserViewModel: ObservableObject {
     }
 
     func retryDeleteVerification(recordID: UUID) {
+        // While a rescan can only replay the session's stale catalog, verification cannot
+        // tell the truth: it re-lists files that were already deleted and puts their rows
+        // back. Refusing here is better than resurrecting them. See `docs/todo.md` P0-1.
+        guard Self.verifiesDeletesAutomatically else {
+            status = "Verification needs a fresh catalog. Reopen the app, then scan."
+            return
+        }
         guard !operationState.isBusy,
               let audit = operationHistory.first(where: { $0.id == recordID })?.deleteAudit,
               audit.verificationState == .pending,
@@ -1549,7 +1556,7 @@ final class MediaBrowserViewModel: ObservableObject {
         do {
             operationHistory = try operationResultStore.append(record)
             operationHistoryWarning = nil
-            if record.hasIssues {
+            if record.deservesAttention {
                 isShowingOperationHistory = true
             }
         } catch {

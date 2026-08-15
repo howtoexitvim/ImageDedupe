@@ -239,7 +239,11 @@ struct MediaCollectionView: NSViewRepresentable {
                 marqueeOverlay = view
                 return view
             }()
+            // The overlay is the collection view's own subview and the marquee rect is in
+            // that same document space, so the frame must be the full document bounds.
             overlay.frame = collectionView.bounds
+            // Drawn above the tiles rather than behind them.
+            overlay.layer?.zPosition = 1
             overlay.marqueeRect = rect
         }
 

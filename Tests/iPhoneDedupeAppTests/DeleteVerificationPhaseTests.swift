@@ -308,7 +308,11 @@ final class DeleteVerificationPhaseTests: XCTestCase {
         viewModel.retryDeleteVerification(recordID: recordID)
         await waitUntil { !viewModel.isDeviceBusy }
 
-        XCTAssertEqual(verificationScanCount, 2, "Retry must perform exactly one more scan.")
+        // While a rescan can only replay the session's stale catalog, Retry Verification is
+        // refused rather than re-listing already-deleted files and restoring their rows.
+        // See `docs/todo.md` P0-1; when that is fixed this becomes 2.
+        let expectedScans = MediaBrowserViewModel.verifiesDeletesAutomatically ? 2 : 1
+        XCTAssertEqual(verificationScanCount, expectedScans)
         XCTAssertEqual(
             viewModel.deleteSubmissionCountForTesting,
             0,
