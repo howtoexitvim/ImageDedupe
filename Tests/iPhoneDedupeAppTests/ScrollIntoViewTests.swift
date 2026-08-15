@@ -96,6 +96,60 @@ final class ScrollIntoViewTests: XCTestCase {
         XCTAssertEqual(MediaTableMetrics.autoScrollVelocity(pointerY: 10, viewportHeight: 30), 0)
     }
 
+    // MARK: - Leaving the window abandons the drag
+
+    private let windowBounds = NSRect(x: 0, y: 0, width: 1_000, height: 700)
+
+    func testDragInsideTheWindowExtends() {
+        XCTAssertTrue(
+            MediaScrollGeometry.dragShouldExtend(
+                pointInWindow: NSPoint(x: 500, y: 350),
+                windowBounds: windowBounds
+            )
+        )
+    }
+
+    /// Regression: dragging out of the app kept selecting items the user could not see.
+    func testDragPastTheRightEdgeOfTheWindowStopsExtending() {
+        XCTAssertFalse(
+            MediaScrollGeometry.dragShouldExtend(
+                pointInWindow: NSPoint(x: 1_400, y: 350),
+                windowBounds: windowBounds
+            )
+        )
+    }
+
+    func testDragBelowTheWindowStopsExtending() {
+        XCTAssertFalse(
+            MediaScrollGeometry.dragShouldExtend(
+                pointInWindow: NSPoint(x: 500, y: -200),
+                windowBounds: windowBounds
+            )
+        )
+    }
+
+    func testDragAboveTheWindowStopsExtending() {
+        XCTAssertFalse(
+            MediaScrollGeometry.dragShouldExtend(
+                pointInWindow: NSPoint(x: 500, y: 900),
+                windowBounds: windowBounds
+            )
+        )
+    }
+
+    /// Overshooting the *viewport* while still inside the window must keep extending —
+    /// that is exactly how edge auto-scroll reaches content past the fold.
+    func testDragPastTheViewportButInsideTheWindowStillExtends() {
+        // Viewport occupies the middle of the window; the pointer is below it but the
+        // pointer is still within the window.
+        XCTAssertTrue(
+            MediaScrollGeometry.dragShouldExtend(
+                pointInWindow: NSPoint(x: 500, y: 10),
+                windowBounds: windowBounds
+            )
+        )
+    }
+
     // MARK: - Marquee rectangle
 
     func testMarqueeRectNormalizesADragUpAndLeft() {

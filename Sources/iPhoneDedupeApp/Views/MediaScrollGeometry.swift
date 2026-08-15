@@ -45,6 +45,19 @@ enum MediaScrollGeometry {
         return nil
     }
 
+    /// Whether a drag at `pointInWindow` should still extend the selection.
+    ///
+    /// Vertical overshoot past the viewport is allowed and expected: holding the pointer
+    /// below the last visible row is exactly how edge auto-scroll walks to the end of a
+    /// long catalog, so the row is clamped to the nearest edge and the selection grows.
+    ///
+    /// Leaving the **window** is different. There the user has taken the pointer somewhere
+    /// with no relationship to the list, and continuing to select items they cannot see is
+    /// surprising. This is checked in window coordinates for exactly that reason.
+    static func dragShouldExtend(pointInWindow: NSPoint, windowBounds: NSRect) -> Bool {
+        windowBounds.contains(pointInWindow)
+    }
+
     /// The marquee rectangle between two points, normalized so dragging in any direction
     /// produces a positive-size rect.
     ///

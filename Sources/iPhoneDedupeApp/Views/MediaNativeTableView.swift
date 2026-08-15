@@ -129,6 +129,17 @@ final class MediaNativeTableView: NSTableView {
                 didBeginDrag = true
             }
 
+            // A pointer dragged outside the window stops extending the selection; it would
+            // otherwise keep checking rows the user cannot see.
+            guard let window,
+                  MediaScrollGeometry.dragShouldExtend(
+                      pointInWindow: event.locationInWindow,
+                      windowBounds: window.contentLayoutRect
+                  ) else {
+                stopAutoScroll()
+                continue
+            }
+
             lastDragPointInWindow = event.locationInWindow
             let point = convert(event.locationInWindow, from: nil)
             let draggedRow = clampedRow(at: point)
@@ -182,11 +193,17 @@ final class MediaNativeTableView: NSTableView {
         }
         guard autoScrollTimer == nil else { return }
 
-        autoScrollTimer = Timer.scheduledTimer(withTimeInterval: 1.0 / 60.0, repeats: true) { [weak self] _ in
+        // `Timer.scheduledTimer` only registers for `.default` run loop mode, but AppKit
+        // runs in `.eventTracking` while the mouse is down, so such a timer never fires
+        // during a drag — which is why auto-scroll appeared not to work at all. Adding the
+        // timer to `.common` covers both modes.
+        let timer = Timer(timeInterval: 1.0 / 60.0, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated {
                 self?.stepAutoScroll()
             }
         }
+        RunLoop.current.add(timer, forMode: .common)
+        autoScrollTimer = timer
     }
 
     private func stepAutoScroll() {

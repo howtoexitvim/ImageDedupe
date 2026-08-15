@@ -154,6 +154,17 @@ final class MediaNativeCollectionView: NSCollectionView {
                 didBegin = true
             }
 
+            // A pointer dragged outside the window stops extending the marquee; it would
+            // otherwise keep selecting items the user cannot see.
+            guard let window,
+                  MediaScrollGeometry.dragShouldExtend(
+                      pointInWindow: event.locationInWindow,
+                      windowBounds: window.contentLayoutRect
+                  ) else {
+                stopAutoScroll()
+                continue
+            }
+
             lastDragPointInWindow = event.locationInWindow
             updateMarquee(to: convert(event.locationInWindow, from: nil))
             updateAutoScroll(for: event)
@@ -193,11 +204,16 @@ final class MediaNativeCollectionView: NSCollectionView {
         }
         guard autoScrollTimer == nil else { return }
 
-        autoScrollTimer = Timer.scheduledTimer(withTimeInterval: 1.0 / 60.0, repeats: true) { [weak self] _ in
+        // Must be added to `.common`, not scheduled on `.default`: AppKit runs in
+        // `.eventTracking` mode while the mouse is down, so a default-mode timer never
+        // fires during the drag that needs it.
+        let timer = Timer(timeInterval: 1.0 / 60.0, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated {
                 self?.stepAutoScroll()
             }
         }
+        RunLoop.current.add(timer, forMode: .common)
+        autoScrollTimer = timer
     }
 
     private func stepAutoScroll() {
