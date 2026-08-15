@@ -7,7 +7,7 @@ final class ImportedFilePathPolicyTests: XCTestCase {
 
     override func setUpWithError() throws {
         directory = FileManager.default.temporaryDirectory
-            .appendingPathComponent("iphone-dedupe-path-policy-\(UUID().uuidString)", isDirectory: true)
+            .appendingPathComponent("image-dedupe-path-policy-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
     }
 
@@ -74,7 +74,7 @@ final class ImportedFilePathPolicyTests: XCTestCase {
 
     func testRejectsASymbolicLinkThatEscapesTheDestination() throws {
         let outside = FileManager.default.temporaryDirectory
-            .appendingPathComponent("iphone-dedupe-outside-\(UUID().uuidString).heic")
+            .appendingPathComponent("image-dedupe-outside-\(UUID().uuidString).heic")
         defer { try? FileManager.default.removeItem(at: outside) }
         try Data("outside".utf8).write(to: outside)
         try FileManager.default.createSymbolicLink(

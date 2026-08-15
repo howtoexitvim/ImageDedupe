@@ -31,6 +31,25 @@ final class StagingAdoptionTests: XCTestCase {
 
         XCTAssertEqual(adopted.directory, created.directory)
         XCTAssertEqual(adopted.markerURL, created.markerURL)
+        XCTAssertEqual(
+            created.markerURL.lastPathComponent,
+            ".image-dedupe-staging",
+            "New sessions must stop creating artifacts under the former product name."
+        )
+    }
+
+    /// An upgrade can leave an in-flight directory created by the former app name. The
+    /// helper must still be able to adopt it so the app can finish or clean the operation.
+    func testAdoptsALegacyMarkedSession() throws {
+        let directory = root.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let legacyMarker = directory.appendingPathComponent(".iphone-dedupe-staging")
+        XCTAssertTrue(FileManager.default.createFile(atPath: legacyMarker.path, contents: Data()))
+
+        let adopted = try manager.adoptSession(at: directory)
+
+        XCTAssertEqual(adopted.directory, directory)
+        XCTAssertEqual(adopted.markerURL, legacyMarker)
     }
 
     /// The marker is what distinguishes a staging directory from an arbitrary one.

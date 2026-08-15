@@ -6,40 +6,60 @@
             "request": "launch",
             "args": [],
             "cwd": "${workspaceFolder}",
-            "name": "Debug iPhoneDedupeVerifier",
-            "target": "iPhoneDedupeVerifier",
+            "name": "Debug ImageDedupeVerifier",
+            "target": "ImageDedupeVerifier",
             "configuration": "debug",
-            "preLaunchTask": "swift: Build Debug iPhoneDedupeVerifier"
+            "preLaunchTask": "swift: Build Debug ImageDedupeVerifier"
         },
         {
             "type": "swift",
             "request": "launch",
             "args": [],
             "cwd": "${workspaceFolder}",
-            "name": "Release iPhoneDedupeVerifier",
-            "target": "iPhoneDedupeVerifier",
+            "name": "Release ImageDedupeVerifier",
+            "target": "ImageDedupeVerifier",
             "configuration": "release",
-            "preLaunchTask": "swift: Build Release iPhoneDedupeVerifier"
+            "preLaunchTask": "swift: Build Release ImageDedupeVerifier"
         },
         {
             "type": "swift",
             "request": "launch",
             "args": [],
             "cwd": "${workspaceFolder}",
-            "name": "Debug iPhoneDedupeApp (raw executable)",
-            "target": "iPhoneDedupeApp",
+            "name": "Debug ImageDedupeHelper",
+            "target": "ImageDedupeHelper",
             "configuration": "debug",
-            "preLaunchTask": "swift: Build Debug iPhoneDedupeApp"
+            "preLaunchTask": "swift: Build Debug ImageDedupeHelper"
         },
         {
             "type": "swift",
             "request": "launch",
             "args": [],
             "cwd": "${workspaceFolder}",
-            "name": "Release iPhoneDedupeApp (raw executable)",
-            "target": "iPhoneDedupeApp",
+            "name": "Release ImageDedupeHelper",
+            "target": "ImageDedupeHelper",
             "configuration": "release",
-            "preLaunchTask": "swift: Build Release iPhoneDedupeApp"
+            "preLaunchTask": "swift: Build Release ImageDedupeHelper"
+        },
+        {
+            "type": "swift",
+            "request": "launch",
+            "args": [],
+            "cwd": "${workspaceFolder}",
+            "name": "Debug ImageDedupeApp (raw executable)",
+            "target": "ImageDedupeApp",
+            "configuration": "debug",
+            "preLaunchTask": "swift: Build Debug ImageDedupeApp"
+        },
+        {
+            "type": "swift",
+            "request": "launch",
+            "args": [],
+            "cwd": "${workspaceFolder}",
+            "name": "Release ImageDedupeApp (raw executable)",
+            "target": "ImageDedupeApp",
+            "configuration": "release",
+            "preLaunchTask": "swift: Build Release ImageDedupeApp"
         }
     ]
 }

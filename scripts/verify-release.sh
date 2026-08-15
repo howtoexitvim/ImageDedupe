@@ -3,7 +3,7 @@
 set -euo pipefail
 
 if (( $# < 1 || $# > 2 )); then
-    print -u2 "usage: verify-release.sh /path/to/iPhone\\ Dedupe.app [--allow-adhoc]"
+    print -u2 "usage: verify-release.sh /path/to/Image\\ Dedupe.app [--allow-adhoc]"
     exit 64
 fi
 

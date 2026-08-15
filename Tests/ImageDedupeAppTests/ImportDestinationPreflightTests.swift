@@ -193,7 +193,7 @@ final class ImportDestinationPreflightTests: XCTestCase {
 
     func testInspectAcceptsARealWritableLocalDirectoryAndRemovesItsProbe() throws {
         let directory = FileManager.default.temporaryDirectory
-            .appendingPathComponent("iphone-dedupe-preflight-\(UUID().uuidString)", isDirectory: true)
+            .appendingPathComponent("image-dedupe-preflight-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
 
@@ -212,7 +212,7 @@ final class ImportDestinationPreflightTests: XCTestCase {
     /// when that file is reached.
     func testInspectAdmitsARealExistingFile() throws {
         let directory = FileManager.default.temporaryDirectory
-            .appendingPathComponent("iphone-dedupe-preflight-\(UUID().uuidString)", isDirectory: true)
+            .appendingPathComponent("image-dedupe-preflight-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
         try Data("existing".utf8).write(to: directory.appendingPathComponent("IMG_0001.HEIC"))

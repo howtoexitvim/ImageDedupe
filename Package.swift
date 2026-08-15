@@ -4,7 +4,7 @@
 import PackageDescription
 
 let package = Package(
-    name: "iphone-dedupe",
+    name: "image-dedupe",
     platforms: [
         // macOS 14 is required for SwiftUI's `.inspector`, which supplies the resizable
         // trailing pane. Hand-rolling that pane produced three separate layout defects

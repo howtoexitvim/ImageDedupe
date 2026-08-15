@@ -50,7 +50,7 @@ swift test
 swift test -c release
 ```
 
-The latest verified baseline is 433 XCTest tests plus 22 Swift Testing tests in both Debug and Release configurations.
+The latest verified baseline is 650 XCTest tests plus 22 Swift Testing tests in both Debug and Release configurations.
 
 The bundle scripts refuse to replace or re-sign their target while that exact app is running. Quit the app before rebuilding; this prevents macOS from terminating a live process with `Code Signature Invalid`.
 
@@ -59,21 +59,21 @@ The bundle scripts refuse to replace or re-sign their target while that exact ap
 An explicitly local, non-distributable ad-hoc Hardened Runtime candidate can be built with:
 
 ```sh
-IPHONE_DEDUPE_ALLOW_ADHOC=1 ./scripts/build-release-candidate.sh
+IMAGE_DEDUPE_ALLOW_ADHOC=1 ./scripts/build-release-candidate.sh
 ```
 
 For a distributable candidate, supply a Developer ID Application identity owned by the caller:
 
 ```sh
-IPHONE_DEDUPE_SIGNING_IDENTITY="Developer ID Application: …" \
+IMAGE_DEDUPE_SIGNING_IDENTITY="Developer ID Application: …" \
   ./scripts/build-release-candidate.sh
 ```
 
 After configuring a caller-owned `notarytool` keychain profile:
 
 ```sh
-IPHONE_DEDUPE_SIGNING_IDENTITY="Developer ID Application: …" \
-IPHONE_DEDUPE_NOTARY_PROFILE="profile-name" \
+IMAGE_DEDUPE_SIGNING_IDENTITY="Developer ID Application: …" \
+IMAGE_DEDUPE_NOTARY_PROFILE="profile-name" \
   ./scripts/notarize-release.sh "/path/to/Image Dedupe.app"
 ```
 

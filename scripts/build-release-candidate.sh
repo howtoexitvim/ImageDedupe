@@ -3,12 +3,12 @@
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "$0")/.." && pwd)"
-signing_identity="${IPHONE_DEDUPE_SIGNING_IDENTITY:-}"
-allow_adhoc="${IPHONE_DEDUPE_ALLOW_ADHOC:-0}"
+signing_identity="${IMAGE_DEDUPE_SIGNING_IDENTITY:-}"
+allow_adhoc="${IMAGE_DEDUPE_ALLOW_ADHOC:-0}"
 
 if [[ -z "$signing_identity" ]]; then
     [[ "$allow_adhoc" == "1" ]] || {
-        print -u2 "release build refused: set IPHONE_DEDUPE_SIGNING_IDENTITY, or explicitly set IPHONE_DEDUPE_ALLOW_ADHOC=1 for a local non-distributable candidate"
+        print -u2 "release build refused: set IMAGE_DEDUPE_SIGNING_IDENTITY, or explicitly set IMAGE_DEDUPE_ALLOW_ADHOC=1 for a local non-distributable candidate"
         exit 1
     }
     signing_identity="-"

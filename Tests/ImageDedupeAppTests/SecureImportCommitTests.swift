@@ -61,6 +61,25 @@ final class SecureImportCommitTests: XCTestCase {
         XCTAssertTrue(FileManager.default.fileExists(atPath: unmarked.path))
     }
 
+    /// Renaming the marker must not orphan temporary directories created by an older build.
+    func testStaleCleanupRemovesALegacyMarkedDirectory() throws {
+        let root = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let manager = ImportStagingManager(rootDirectory: root)
+        let directory = root.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false)
+        let marker = directory.appendingPathComponent(".iphone-dedupe-staging")
+        try Data(String(Int32.max).utf8).write(to: marker)
+        try FileManager.default.setAttributes(
+            [.modificationDate: Date(timeIntervalSince1970: 1_000)],
+            ofItemAtPath: marker.path
+        )
+
+        try manager.cleanupStaleSessions(olderThan: Date(timeIntervalSince1970: 10_000))
+
+        XCTAssertFalse(FileManager.default.fileExists(atPath: directory.path))
+    }
+
     func testCapacityCheckRequiresEnoughSpaceForTheWholeStagedFile() {
         XCTAssertTrue(DestinationCommitter.hasSufficientCapacity(requiredBytes: 10, availableBytes: 10))
         XCTAssertFalse(DestinationCommitter.hasSufficientCapacity(requiredBytes: 11, availableBytes: 10))
@@ -322,7 +341,7 @@ final class SecureImportCommitTests: XCTestCase {
 
     private func makeTemporaryDirectory() throws -> URL {
         let directory = FileManager.default.temporaryDirectory
-            .appendingPathComponent("iphone-dedupe-secure-import-\(UUID().uuidString)", isDirectory: true)
+            .appendingPathComponent("image-dedupe-secure-import-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false)
         return directory
     }

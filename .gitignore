@@ -8,8 +8,8 @@ DerivedData/
 .netrc
 
 # Generated outputs and local device scan artifacts
-/Outputs/iphone-dedupe
+/Outputs/image-dedupe
 /Outputs/*.csv
-/outputs/iphone-dedupe
+/outputs/image-dedupe
 /outputs/*.csv
-/iphone-dedupe-*.csv
+/image-dedupe-*.csv

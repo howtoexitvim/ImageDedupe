@@ -9,7 +9,7 @@ final class OperationResultStoreTests: XCTestCase {
 
     override func setUpWithError() throws {
         directoryURL = FileManager.default.temporaryDirectory
-            .appendingPathComponent("iphone-dedupe-result-tests-\(UUID().uuidString)", isDirectory: true)
+            .appendingPathComponent("image-dedupe-result-tests-\(UUID().uuidString)", isDirectory: true)
         fileURL = directoryURL.appendingPathComponent("history.json")
     }
 

@@ -25,11 +25,8 @@ public struct ImportStagingSession: Equatable, Sendable {
 }
 
 public struct ImportStagingManager: Sendable {
-    /// Keeps its original spelling deliberately. The marker identifies staging directories
-    /// already on disk, and `cleanupStaleSessions` only removes directories carrying it —
-    /// renaming it would orphan any marker left by a previous version rather than cleaning
-    /// it up. It is never shown to the user.
-    public static let markerFilename = ".iphone-dedupe-staging"
+    public static let markerFilename = ".image-dedupe-staging"
+    private static let legacyMarkerFilenames = [".iphone-dedupe-staging"]
     public let rootDirectory: URL
 
     public init(rootDirectory: URL) {
@@ -101,8 +98,7 @@ public struct ImportStagingManager: Sendable {
             throw ImportStagingError.filesystem("The staging path is not a directory.")
         }
 
-        let marker = standardized.appendingPathComponent(Self.markerFilename, isDirectory: false)
-        guard fileManager.fileExists(atPath: marker.path) else {
+        guard let marker = recognizedMarker(in: standardized) else {
             throw ImportStagingError.filesystem("The staging directory has no staging marker.")
         }
 
@@ -134,7 +130,7 @@ public struct ImportStagingManager: Sendable {
         for child in children {
             let values = try? child.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey])
             guard values?.isDirectory == true, values?.isSymbolicLink != true else { continue }
-            let marker = child.appendingPathComponent(Self.markerFilename, isDirectory: false)
+            guard let marker = recognizedMarker(in: child) else { continue }
             let markerValues = try? marker.resourceValues(forKeys: [
                 .contentModificationDateKey,
                 .isRegularFileKey,
@@ -178,9 +174,7 @@ public struct ImportStagingManager: Sendable {
         guard candidateValues?.isDirectory == true, candidateValues?.isSymbolicLink != true else {
             throw ImportStagingError.missingMarker
         }
-        let marker = candidate.appendingPathComponent(Self.markerFilename, isDirectory: false)
-        let markerValues = try? marker.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey])
-        guard markerValues?.isRegularFile == true, markerValues?.isSymbolicLink != true else {
+        guard recognizedMarker(in: candidate) != nil else {
             throw ImportStagingError.missingMarker
         }
         do {
@@ -188,5 +182,18 @@ public struct ImportStagingManager: Sendable {
         } catch {
             throw ImportStagingError.filesystem(error.localizedDescription)
         }
+    }
+
+    /// New sessions write only the current marker. Readers also accept the former marker so
+    /// an upgrade can finish or safely remove a session created by an earlier build.
+    private func recognizedMarker(in directory: URL) -> URL? {
+        for filename in [Self.markerFilename] + Self.legacyMarkerFilenames {
+            let marker = directory.appendingPathComponent(filename, isDirectory: false)
+            let values = try? marker.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey])
+            if values?.isRegularFile == true, values?.isSymbolicLink != true {
+                return marker
+            }
+        }
+        return nil
     }
 }

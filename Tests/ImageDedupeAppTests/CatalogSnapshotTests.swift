@@ -89,7 +89,7 @@ final class CatalogSnapshotTests: XCTestCase {
 
     func testMissingLocalDownloadClearsBadgeWithoutRemovingDeviceItem() throws {
         let directory = FileManager.default.temporaryDirectory
-            .appendingPathComponent("iphone-dedupe-imported-badge-\(UUID().uuidString)", isDirectory: true)
+            .appendingPathComponent("image-dedupe-imported-badge-\(UUID().uuidString)", isDirectory: true)
         let downloadedFile = directory.appendingPathComponent("IMG_0000.HEIC")
         defer { try? FileManager.default.removeItem(at: directory) }
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -111,7 +111,7 @@ final class CatalogSnapshotTests: XCTestCase {
     func testLocalDownloadReconciliationDoesNotReplaceActiveOperationStatus() {
         let viewModel = viewModel(count: 1)
         let missingFile = FileManager.default.temporaryDirectory
-            .appendingPathComponent("iphone-dedupe-missing-\(UUID().uuidString).HEIC")
+            .appendingPathComponent("image-dedupe-missing-\(UUID().uuidString).HEIC")
         viewModel.recordSuccessfulDownload(itemID: "id-0", fileURL: missingFile)
         XCTAssertTrue(viewModel.beginOperationForTesting(.importing))
         viewModel.status = "Importing 1 item(s)..."
