@@ -341,25 +341,29 @@ struct MediaBrowserView: View {
                 Text(viewModel.status)
                     .mediaStatusBarText(MediaStatusBarText(message: viewModel.status))
             }
-            Spacer(minLength: 0)
-            if plan.showsSelectedCount {
-                Text("\(viewModel.selectedActionIDs.count) selected")
-                    .mediaStatusBarLabel()
-                    .foregroundStyle(.secondary)
-                    .accessibilityLabel("Selected items: \(viewModel.selectedActionIDs.count)")
-            }
-            if plan.showsShownCount {
-                Text("\(viewModel.filteredItems.count) shown / \(viewModel.allItems.count) total")
-                    .mediaStatusBarLabel()
-                    .foregroundStyle(.secondary)
-                    .accessibilityLabel("Shown items: \(viewModel.filteredItems.count) of \(viewModel.allItems.count)")
-            }
-            if plan.showsDuplicateCount {
-                Text("Duplicate candidates \(viewModel.duplicatePlan.delete.count)")
-                    .mediaStatusBarLabel()
-                    .foregroundStyle(.secondary)
-                    .help("Conservative duplicate candidates under the current name-kind-size rule.")
-                    .accessibilityLabel("Duplicate candidates: \(viewModel.duplicatePlan.delete.count)")
+            // Guarantees breathing room between Cancel and the counts even when the bar is
+            // tight; a plain Spacer collapses to zero and lets them touch.
+            Spacer(minLength: 16)
+            HStack(spacing: 12) {
+                if plan.showsSelectedCount {
+                    Text("\(viewModel.selectedActionIDs.count) selected")
+                        .mediaStatusBarLabel()
+                        .foregroundStyle(.secondary)
+                        .accessibilityLabel("Selected items: \(viewModel.selectedActionIDs.count)")
+                }
+                if plan.showsShownCount {
+                    Text("\(viewModel.filteredItems.count) shown / \(viewModel.allItems.count) total")
+                        .mediaStatusBarLabel()
+                        .foregroundStyle(.secondary)
+                        .accessibilityLabel("Shown items: \(viewModel.filteredItems.count) of \(viewModel.allItems.count)")
+                }
+                if plan.showsDuplicateCount {
+                    Text("Duplicate candidates \(viewModel.duplicatePlan.delete.count)")
+                        .mediaStatusBarLabel()
+                        .foregroundStyle(.secondary)
+                        .help("Conservative duplicate candidates under the current name-kind-size rule.")
+                        .accessibilityLabel("Duplicate candidates: \(viewModel.duplicatePlan.delete.count)")
+                }
             }
         }
         .font(.caption)

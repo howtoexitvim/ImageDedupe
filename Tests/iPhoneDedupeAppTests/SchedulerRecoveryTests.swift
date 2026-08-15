@@ -94,6 +94,51 @@ final class SchedulerRecoveryTests: XCTestCase {
         }
     }
 
+    /// The second one-way latch.
+    ///
+    /// `canceledGenerations` was only ever inserted into, so once a generation was canceled
+    /// every later request carrying it failed with `This request belongs to an older device
+    /// scan.` The current catalog's generation is exactly what Download, preview, and Delete
+    /// pass, so one canceled Download poisoned all of them until a rescan.
+    func testCancelingAGenerationDoesNotPoisonTheCurrentCatalogForever() async throws {
+        let scheduler = DeviceCommandScheduler()
+        let generation = UUID()
+
+        await scheduler.cancelQueued(generation: generation)
+        do {
+            _ = try await scheduler.acquire(priority: .low, generation: generation)
+            XCTFail("Queued work from the canceled generation must be rejected.")
+        } catch {
+            XCTAssertEqual(error as? DeviceCommandScheduler.AcquireError, .generationCanceled)
+        }
+
+        // The catalog is still valid, so the user retrying must be admitted again.
+        await scheduler.reinstate(generation: generation)
+        let lease = try await scheduler.acquire(priority: .low, generation: generation)
+        await scheduler.release(lease)
+    }
+
+    func testCanceledGenerationSetDoesNotGrowWithoutBound() async throws {
+        let scheduler = DeviceCommandScheduler()
+        var generations: [UUID] = []
+
+        for _ in 0..<50 {
+            let generation = UUID()
+            generations.append(generation)
+            await scheduler.cancelQueued(generation: generation)
+        }
+
+        // Only the most recent supersessions need to be remembered; retaining every
+        // generation for the life of the process is a leak as well as a correctness trap.
+        let retained = await scheduler.canceledGenerationCount
+        XCTAssertLessThanOrEqual(retained, 8, "Canceled generations must be bounded.")
+
+        // The oldest ones are forgotten, so their requests are no longer rejected outright.
+        let oldest = try XCTUnwrap(generations.first)
+        let lease = try await scheduler.acquire(priority: .low, generation: oldest)
+        await scheduler.release(lease)
+    }
+
     func testAFreshScanRecoversTheGatewayAfterAnAcknowledgedCancellation() async throws {
         let scheduler = DeviceCommandScheduler()
         await scheduler.suspendForCancellation()

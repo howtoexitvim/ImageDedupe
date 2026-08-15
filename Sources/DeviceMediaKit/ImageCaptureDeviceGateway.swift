@@ -37,7 +37,16 @@ public final class ImageCaptureDeviceGateway: NSObject, @preconcurrency ICDevice
     private let deviceNameContains: String?
     private let scheduler: DeviceCommandScheduler
     private let openSessionRetryDelay: Duration
-    private let browser = ICDeviceBrowser()
+
+    /// Recreated for every scan.
+    ///
+    /// A single reused `ICDeviceBrowser` is the root cause of the slow-delete and
+    /// broken-rescan reports: once stopped, restarting the same instance does not
+    /// re-enumerate a device it already knows, so the second scan never received `didAdd`,
+    /// never opened a session, and never got `deviceDidBecomeReady`. Measured on a real
+    /// device: first scan 1.1 s, second scan timed out. A fresh browser enumerates from
+    /// scratch every time.
+    private var browser = ICDeviceBrowser()
 
     /// The device the browser is currently tracking. Cleared whenever browsing stops.
     private var selectedDevice: ICCameraDevice?
@@ -65,6 +74,19 @@ public final class ImageCaptureDeviceGateway: NSObject, @preconcurrency ICDevice
     /// Cleared whenever the session is refreshed, because handles may be reused for other
     /// files in a later catalog and stale evidence must never confirm a newer delete.
     private var observedRemovedHandles: Set<UInt32> = []
+
+    /// Set when a delete has mutated the device since the session's catalog was enumerated.
+    ///
+    /// An adopted open session serves `mediaFiles` from its own cache, which still lists a
+    /// just-deleted file — a device test saw a real deletion reported as `remainingExact
+    /// Matches=1`. The next scan must therefore re-enumerate rather than adopt that cache.
+    private var isSessionCatalogStale = false
+
+    /// The camera device this process is holding, kept across browser restarts.
+    ///
+    /// ImageCaptureCore does not re-advertise a device the process already holds, so without
+    /// this a second scan had nothing to adopt and timed out.
+    private var retainedDevice: ICCameraDevice?
 
     private var catalogGeneration: UUID?
     private var filesByToken: [DeviceFileToken: ICCameraFile] = [:]
@@ -109,6 +131,11 @@ public final class ImageCaptureDeviceGateway: NSObject, @preconcurrency ICDevice
 
         let callback = DeviceOneShotCallback<DeviceCatalogSnapshot>()
         scanCallback = callback
+        // A fresh browser per scan; the previous one is detached so its late callbacks
+        // cannot disturb this scan.
+        browser.delegate = nil
+        browser = ICDeviceBrowser()
+        browser.delegate = self
         browser.browsedDeviceTypeMask = deviceMask
 
         do {
@@ -134,6 +161,11 @@ public final class ImageCaptureDeviceGateway: NSObject, @preconcurrency ICDevice
                 // Browsing is live again, so removals once more mean a real disconnect.
                 self.hasStoppedBrowserDeliberately = false
                 self.browser.start()
+                // ImageCaptureCore only reports devices it considers newly discovered. A
+                // device this process already holds is not re-advertised, so a second scan
+                // received no `didAdd` at all and waited out its timeout. Any device the
+                // browser already knows is adopted directly.
+                self.adoptAlreadyBrowsedDevice()
             }
             stopBrowsing()
             scanCallback = nil
@@ -259,6 +291,14 @@ public final class ImageCaptureDeviceGateway: NSObject, @preconcurrency ICDevice
         onProgress: ((DeviceBatchProgress) -> Void)? = nil,
         timeout: Duration = .seconds(120)
     ) async -> DeviceGatewayImportSummary {
+        // Cancelling a batch must not disable the catalog it came from. Without this, one
+        // canceled Download left the current generation marked canceled, so later Download,
+        // preview, and Delete requests were all refused as belonging to an older scan.
+        defer {
+            if let generation = tokens.first?.generation, generation == catalogGeneration {
+                Task { await scheduler.reinstate(generation: generation) }
+            }
+        }
         var summary = DeviceGatewayImportSummary()
         let total = tokens.count
         onProgress?(DeviceBatchProgress(
@@ -338,6 +378,12 @@ public final class ImageCaptureDeviceGateway: NSObject, @preconcurrency ICDevice
         }
         let lease = try await scheduler.acquire(priority: .high, generation: tokens.first?.generation)
         defer { Task { await scheduler.release(lease) } }
+        // As with download: a canceled delete must leave the catalog usable.
+        defer {
+            if let generation = tokens.first?.generation, generation == catalogGeneration {
+                Task { await scheduler.reinstate(generation: generation) }
+            }
+        }
         var summary = DeviceGatewayDeleteSummary()
 
         // Fail the whole batch up front when nothing can be submitted, rather than letting
@@ -377,6 +423,8 @@ public final class ImageCaptureDeviceGateway: NSObject, @preconcurrency ICDevice
             do {
                 try await deleteOne(token, cancellation: cancellation, timeout: timeout)
                 summary.successful.append(token)
+                // The adopted session's cached catalog no longer matches the device.
+                isSessionCatalogStale = true
             } catch DeviceGatewayError.canceled {
                 summary.canceled.append(contentsOf: tokens[index...])
                 break
@@ -423,6 +471,7 @@ public final class ImageCaptureDeviceGateway: NSObject, @preconcurrency ICDevice
         }
         selectedDevice = camera
         commandDevice = camera
+        retainedDevice = camera
         camera.delegate = self
         requestOpenSession(on: camera)
     }
@@ -500,6 +549,13 @@ public final class ImageCaptureDeviceGateway: NSObject, @preconcurrency ICDevice
 
     public func deviceDidBecomeReady(withCompleteContentCatalog device: ICCameraDevice) {
         guard device === selectedDevice else { return }
+        publishCatalog(from: device)
+    }
+
+    /// Builds the catalog snapshot from whatever the device currently lists and finishes
+    /// the pending scan. Shared by the readiness callback and by adopting an already-open
+    /// device, which never receives that callback a second time.
+    private func publishCatalog(from device: ICCameraDevice) {
         let generation = UUID()
         let cameraFiles = (device.mediaFiles ?? []).compactMap { $0 as? ICCameraFile }
         var resolved: [DeviceFileToken: ICCameraFile] = [:]
@@ -761,8 +817,46 @@ public final class ImageCaptureDeviceGateway: NSObject, @preconcurrency ICDevice
         selectedDevice = nil
     }
 
+    /// Adopts a device the browser already lists, for scans that get no `didAdd`.
+    ///
+    /// `ICDeviceBrowser.devices` is already populated for a device this process holds, so
+    /// this is what makes a second and later scan work at all.
+    private func adoptAlreadyBrowsedDevice() {
+        guard selectedDevice == nil else { return }
+        // The new browser may not list it yet, so the previously held device counts too.
+        let known = (browser.devices ?? []).compactMap { $0 as? ICCameraDevice }
+            + [retainedDevice].compactMap { $0 }
+        for camera in known {
+            if let needle = deviceNameContains?.lowercased(),
+               !(camera.name ?? "").lowercased().contains(needle) {
+                continue
+            }
+            selectedDevice = camera
+            commandDevice = camera
+            retainedDevice = camera
+            camera.delegate = self
+            if camera.hasOpenSession, !isSessionCatalogStale {
+                // The catalog is already enumerated on this open session, so the readiness
+                // callback will not fire again; publish what the device already has.
+                publishCatalog(from: camera)
+            } else {
+                requestOpenSession(on: camera)
+            }
+            return
+        }
+    }
+
     /// Discards the retained session so a new full scan starts from a clean device binding.
+    ///
+    /// The open session must be closed, not merely forgotten. `deviceDidBecomeReady(with
+    /// CompleteContentCatalog:)` fires once per opened session, so a second scan against a
+    /// device whose session was still open never received the callback and waited out its
+    /// entire timeout — three retries at 120 s made a one-file delete take over six minutes.
     private func refreshDeviceSession() {
+        // The open session is deliberately kept: `mediaFiles` on a live session reflects the
+        // device's current contents, so adopting it gives an up-to-date catalog immediately.
+        // Closing it would force a full re-enumeration that this process does not get
+        // re-advertised for.
         stopBrowsing()
         commandDevice = nil
         observedRemovedHandles.removeAll()

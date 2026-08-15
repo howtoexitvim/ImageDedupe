@@ -772,7 +772,8 @@ final class MediaBrowserViewModel: ObservableObject {
         operationCancellation = DeviceOperationCancellation()
         beginVerification(
             snapshot: audit.snapshot,
-            summary: audit.frameworkSummary ?? DeviceGatewayDeleteSummary()
+            summary: audit.frameworkSummary ?? DeviceGatewayDeleteSummary(),
+            isUserRequested: true
         )
     }
 
@@ -1144,10 +1145,26 @@ final class MediaBrowserViewModel: ObservableObject {
 
     /// How long a verification rescan may run before it is abandoned as pending.
     ///
-    /// Deliberately far below the previous 180 seconds. Verification is a read-only catalog
-    /// rescan whose only honest failure mode is "could not confirm"; making the user wait
-    /// three minutes for that answer, under a label that said `Deleting`, was the defect.
-    static let verificationTimeout: Duration = .seconds(45)
+    /// Short on purpose. A second scan on the same gateway currently never completes — a
+    /// device measurement showed the first scan finishing in 1.1 s and the second timing out
+    /// — so a long timeout only makes the user wait for an answer that is not coming.
+    /// Verification therefore fails fast and is recorded as pending, and the delete result
+    /// stays honest instead of blocking the UI.
+    static let verificationTimeout: Duration = .seconds(8)
+
+    /// Whether a delete automatically rescans to verify.
+    ///
+    /// Off, at the user's direction, after measuring the alternatives on a real device.
+    /// A read-only rescan is fast (~0.6 s), but a rescan *after a delete* does not work:
+    /// ImageCaptureCore serves the adopted session's stale cache, and forcing a fresh
+    /// enumeration by closing the session put the scan back into its full timeout. Three
+    /// approaches were tried and measured; a one-file delete cost over six minutes.
+    ///
+    /// The delete itself is fast and correct — device checks confirmed each file was
+    /// removed. So the delete is submitted and reported honestly, and the user rescans when
+    /// they want confirmation. Rows are still never removed without proof, and Results still
+    /// offers Retry Verification.
+    static let verifiesDeletesAutomatically = false
 
     /// How long the UI waits for the framework to acknowledge a cancellation before it
     /// settles anyway. The operation is then recorded as verification-pending.
@@ -1210,7 +1227,8 @@ final class MediaBrowserViewModel: ObservableObject {
         beginVerification(
             snapshot: snapshot,
             summary: summary,
-            observedRemovedHandles: observedRemovedHandles
+            observedRemovedHandles: observedRemovedHandles,
+            isUserRequested: true
         )
     }
 
@@ -1257,7 +1275,10 @@ final class MediaBrowserViewModel: ObservableObject {
     private func beginVerification(
         snapshot: DeletePlanSnapshot,
         summary: DeviceGatewayDeleteSummary,
-        observedRemovedHandles: Set<UInt32> = []
+        observedRemovedHandles: Set<UInt32> = [],
+        // Retry Verification is a deliberate user action, so it always scans even though
+        // the automatic post-delete rescan is disabled.
+        isUserRequested: Bool = false
     ) {
         // Nothing reached the device: finish now rather than making the user sit through a
         // misleading destructive-looking phase for an answer already known.
@@ -1290,6 +1311,26 @@ final class MediaBrowserViewModel: ObservableObject {
             finishVerification(
                 audit: audit,
                 status: "Delete verified: \(audit.items.count) removed."
+            )
+            return
+        }
+
+        // Automatic verification is disabled: the rescan does not complete on a live gateway
+        // and turned a one-file delete into a multi-minute wait. The framework's own result
+        // is recorded, but it is never treated as proof — rows stay until a catalog confirms
+        // removal, and Results offers Retry Verification for a deliberate check.
+        if !Self.verifiesDeletesAutomatically, !isUserRequested {
+            let removed = summary.successful.count
+            let failed = summary.failed.count
+            finishVerification(
+                audit: DeleteReconciler.unverified(
+                    snapshot: snapshot,
+                    reason: "Submitted to the device; not verified against a fresh catalog.",
+                    frameworkSummary: summary
+                ),
+                status: failed == 0
+                    ? "Delete submitted for \(removed) item(s). Scan again to confirm."
+                    : "Delete submitted: \(removed) reported removed, \(failed) failed. Scan again to confirm."
             )
             return
         }

@@ -44,6 +44,12 @@ public actor DeviceCommandScheduler {
     private var lowPriorityWaiters: [Waiter] = []
     private var canceledGenerations: Set<UUID> = []
 
+    /// Insertion order for `canceledGenerations`, so the oldest can be forgotten.
+    private var canceledGenerationOrder: [UUID] = []
+
+    /// Only enough history to catch stragglers from recently superseded scans.
+    private static let maximumCanceledGenerations = 4
+
     /// Permanent latch. Set only when a framework operation was never acknowledged, so the
     /// device may still be mid-command and no further submission is safe.
     private var isInvalidated = false
@@ -101,10 +107,36 @@ public actor DeviceCommandScheduler {
         startNextCommand()
     }
 
+    /// Rejects work already queued for a superseded generation.
+    ///
+    /// The set is bounded and ordered: it only needs to catch requests still in flight from
+    /// a scan that has just been replaced. Retaining every generation forever made this a
+    /// second one-way latch — one canceled Download poisoned the current catalog's
+    /// generation, so later Download, preview, and Delete requests all failed with
+    /// `This request belongs to an older device scan.`
     public func cancelQueued(generation: UUID) {
-        canceledGenerations.insert(generation)
+        if !canceledGenerations.contains(generation) {
+            canceledGenerations.insert(generation)
+            canceledGenerationOrder.append(generation)
+        }
+        while canceledGenerationOrder.count > Self.maximumCanceledGenerations {
+            canceledGenerations.remove(canceledGenerationOrder.removeFirst())
+        }
         rejectWaiters(in: &highPriorityWaiters, generation: generation)
         rejectWaiters(in: &lowPriorityWaiters, generation: generation)
+    }
+
+    /// Allows a generation to be used again after its in-flight work was cleared.
+    ///
+    /// A canceled operation does not invalidate the catalog it belonged to, so the user
+    /// retrying against the same visible items must be admitted.
+    public func reinstate(generation: UUID) {
+        canceledGenerations.remove(generation)
+        canceledGenerationOrder.removeAll { $0 == generation }
+    }
+
+    var canceledGenerationCount: Int {
+        canceledGenerations.count
     }
 
     public func invalidate() {

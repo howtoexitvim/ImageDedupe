@@ -122,6 +122,22 @@ private func scanWithRetry(
 }
 
 @MainActor
+private func runDoubleScan(timeout: TimeInterval) async throws {
+    let gateway = ImageCaptureDeviceGateway()
+    let firstStart = Date()
+    let first = try await gateway.scan(timeout: .seconds(timeout))
+    print("firstScan=\(first.files.count) seconds=\(String(format: "%.2f", Date().timeIntervalSince(firstStart)))")
+
+    let secondStart = Date()
+    do {
+        let second = try await gateway.scan(timeout: .seconds(timeout))
+        print("secondScan=\(second.files.count) seconds=\(String(format: "%.2f", Date().timeIntervalSince(secondStart)))")
+    } catch {
+        print("secondScanFailed=\(error) seconds=\(String(format: "%.2f", Date().timeIntervalSince(secondStart)))")
+    }
+}
+
+@MainActor
 private func runScan(timeout: TimeInterval) async throws {
     let gateway = ImageCaptureDeviceGateway()
     let result = try await scanWithRetry(gateway: gateway, timeout: timeout)
@@ -298,6 +314,11 @@ do {
     switch args.command {
     case "scan":
         try await runScan(timeout: args.timeout)
+    case "double-scan":
+        // Diagnostic: isolates whether a second scan on the same gateway completes, with no
+        // delete involved. A one-file delete took minutes because its verification rescan
+        // never received `deviceDidBecomeReady`, and this separates that from the delete.
+        try await runDoubleScan(timeout: args.timeout)
     case "find-exact-name":
         try await findExactName(args)
     case "inspect-location":
