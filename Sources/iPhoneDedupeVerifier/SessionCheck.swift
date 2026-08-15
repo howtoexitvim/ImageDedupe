@@ -13,6 +13,14 @@ enum SessionCheck {
             let first = try await session.scan(timeout: .seconds(timeout))
             print("sessionScan1=\(first.files.count)")
 
+            // The crash on 2026-08-15 was Dictionary(uniqueKeysWithValues:) trapping on a
+            // duplicate model id, so report collisions directly.
+            var seen: [String: Int] = [:]
+            for file in first.files { seen[file.model.id, default: 0] += 1 }
+            let collisions = seen.filter { $0.value > 1 }
+            print("duplicateModelIDs=\(collisions.count)")
+            for (id, count) in collisions.prefix(10) { print("  collision id=\(id) count=\(count)") }
+
             if pauseSeconds > 0 {
                 print("pausing=\(Int(pauseSeconds))s — change the device now")
                 try? await Task.sleep(nanoseconds: UInt64(pauseSeconds * 1_000_000_000))
