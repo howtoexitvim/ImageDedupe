@@ -38,4 +38,65 @@ final class StatusBarLayoutTests: XCTestCase {
         XCTAssertEqual(label.lineLimit, 1)
         XCTAssertEqual(label.help, "Idle")
     }
+
+    // MARK: - Narrow widths drop labels instead of wrapping
+    //
+    // Bounding only the status text was not enough. Every other label in the bar — the
+    // destination menu, "Results", the counts — could still wrap, and at narrow widths
+    // SwiftUI compressed those instead, so "Results" broke into "Re-/sults" and the bar
+    // still grew taller. Nothing in the bar may wrap; items are dropped in priority order.
+
+    func testWideBarShowsEveryElement() {
+        let plan = MediaStatusBarLayout.plan(availableWidth: 1280, hasProgress: false)
+
+        XCTAssertTrue(plan.showsDestinationTitle)
+        XCTAssertTrue(plan.showsResultsTitle)
+        XCTAssertTrue(plan.showsSelectedCount)
+        XCTAssertTrue(plan.showsShownCount)
+        XCTAssertTrue(plan.showsDuplicateCount)
+    }
+
+    func testNarrowBarHidesTitlesRatherThanWrappingThem() {
+        let plan = MediaStatusBarLayout.plan(availableWidth: 620, hasProgress: true)
+
+        XCTAssertFalse(
+            plan.showsResultsTitle,
+            "`Results` must collapse to its icon rather than wrap to two lines."
+        )
+        XCTAssertFalse(
+            plan.showsDestinationTitle,
+            "The destination name must collapse to its folder icon."
+        )
+    }
+
+    func testCountsDropInPriorityOrderAsWidthShrinks() {
+        let duplicateGone = MediaStatusBarLayout.plan(availableWidth: 900, hasProgress: true)
+        XCTAssertFalse(duplicateGone.showsDuplicateCount, "Duplicate count is the first to go.")
+        XCTAssertTrue(duplicateGone.showsSelectedCount)
+
+        let shownGone = MediaStatusBarLayout.plan(availableWidth: 760, hasProgress: true)
+        XCTAssertFalse(shownGone.showsShownCount)
+
+        let selectedGone = MediaStatusBarLayout.plan(availableWidth: 520, hasProgress: true)
+        XCTAssertFalse(selectedGone.showsSelectedCount)
+    }
+
+    func testActionButtonsAndCancelSurviveTheNarrowestWidth() {
+        let plan = MediaStatusBarLayout.plan(availableWidth: 320, hasProgress: true)
+
+        // Controls the user must be able to reach are never dropped; only labels are.
+        XCTAssertTrue(plan.showsProgressText)
+        XCTAssertFalse(plan.showsProgressBar, "The decorative bar yields before the text.")
+    }
+
+    func testProgressReservesRoomSoCountsYieldEarlier() {
+        // At a width that fits everything when idle, the progress bar and its text push the
+        // lowest-priority count out.
+        let width: CGFloat = 1_120
+        let withoutProgress = MediaStatusBarLayout.plan(availableWidth: width, hasProgress: false)
+        let withProgress = MediaStatusBarLayout.plan(availableWidth: width, hasProgress: true)
+
+        XCTAssertTrue(withoutProgress.showsDuplicateCount)
+        XCTAssertFalse(withProgress.showsDuplicateCount)
+    }
 }

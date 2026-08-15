@@ -220,7 +220,33 @@ struct MediaBrowserView: View {
         }
     }
 
+    /// Fixed single-line bottom bar.
+    ///
+    /// The height is driven by the content's natural single-line height; `GeometryReader`
+    /// only measures the available width so `MediaStatusBarLayout` can decide which labels
+    /// survive. Nothing here is allowed to wrap.
     private var statusBar: some View {
+        GeometryReader { proxy in
+            statusBarContent(
+                plan: MediaStatusBarLayout.plan(
+                    availableWidth: proxy.size.width,
+                    hasProgress: viewModel.operationProgress != nil
+                )
+            )
+            .frame(width: proxy.size.width, alignment: .leading)
+        }
+        .frame(height: statusBarHeight)
+    }
+
+    /// One line of caption text plus the vertical padding, so the bar cannot change height.
+    /// Derived from the font rather than hardcoded, so larger accessibility text still fits
+    /// instead of clipping the controls.
+    private var statusBarHeight: CGFloat {
+        let lineHeight = NSFont.preferredFont(forTextStyle: .caption1).boundingRectForFont.height
+        return max(28, ceil(lineHeight) + 20)
+    }
+
+    private func statusBarContent(plan: MediaStatusBarLayout.Plan) -> some View {
         HStack {
             Menu {
                 destinationButton("Pictures", .picturesDirectory)
@@ -231,13 +257,26 @@ struct MediaBrowserView: View {
                 Divider()
                 Button("Other...") { chooseImportDestination() }
             } label: {
-                Label(viewModel.importDestination.lastPathComponent, systemImage: "folder")
+                if plan.showsDestinationTitle {
+                    HStack(spacing: 4) {
+                        Image(systemName: "folder")
+                        Text(viewModel.importDestination.lastPathComponent)
+                            .mediaStatusBarLabel()
+                    }
+                } else {
+                    // Collapses to the icon rather than wrapping the folder name.
+                    Image(systemName: "folder")
+                }
             }
             .menuStyle(.borderlessButton)
+            .fixedSize()
+            .help("Download destination: \(viewModel.importDestination.path)")
+            .accessibilityLabel("Download destination: \(viewModel.importDestination.lastPathComponent)")
 
             Button("Download") {
                 viewModel.importSelected()
             }
+            .mediaStatusBarLabel()
             .disabled(viewModel.selectedActionIDs.isEmpty || viewModel.isDeviceBusy)
             .accessibilityLabel("Download")
 
@@ -253,6 +292,7 @@ struct MediaBrowserView: View {
             Button("Delete") {
                 viewModel.requestDeleteConfirmation()
             }
+            .mediaStatusBarLabel()
             .disabled(viewModel.selectedActionIDs.isEmpty || viewModel.isDeviceBusy)
 
             Divider().frame(height: 16)
@@ -261,18 +301,31 @@ struct MediaBrowserView: View {
                 Button {
                     viewModel.showOperationHistory()
                 } label: {
-                    Label("Results", systemImage: "list.bullet.rectangle")
+                    if plan.showsResultsTitle {
+                        // `Label` lets its title wrap inside a borderless button, which is
+                        // how this became `Re-/sults` and grew the bar. An explicit HStack
+                        // of icon + non-wrapping Text does not.
+                        HStack(spacing: 4) {
+                            Image(systemName: "list.bullet.rectangle")
+                            Text("Results").mediaStatusBarLabel()
+                        }
+                    } else {
+                        Image(systemName: "list.bullet.rectangle")
+                    }
                 }
                 .buttonStyle(.borderless)
+                .fixedSize()
                 .help("Review saved import and delete issues")
                 .accessibilityLabel("Review saved operation results")
             }
 
             if let progress = viewModel.operationProgress {
-                ProgressView(value: progress.fractionCompleted)
-                    .frame(width: 96)
-                    .accessibilityLabel(progress.kind == .importing ? "Import progress" : "Delete progress")
-                    .accessibilityValue("\(progress.completedItems) of \(progress.totalItems)")
+                if plan.showsProgressBar {
+                    ProgressView(value: progress.fractionCompleted)
+                        .frame(width: 96)
+                        .accessibilityLabel(progress.kind == .importing ? "Import progress" : "Delete progress")
+                        .accessibilityValue("\(progress.completedItems) of \(progress.totalItems)")
+                }
                 Text(progress.detail)
                     .mediaStatusBarText(
                         MediaStatusBarText(message: progress.detail, prefix: "Operation status")
@@ -280,6 +333,7 @@ struct MediaBrowserView: View {
                 Button(progress.isCanceling ? "Canceling…" : "Cancel") {
                     viewModel.cancelCurrentOperation()
                 }
+                .mediaStatusBarLabel()
                 .controlSize(.small)
                 .disabled(!progress.canCancel)
                 .accessibilityHint("Stops after the device acknowledges cancellation")
@@ -287,24 +341,38 @@ struct MediaBrowserView: View {
                 Text(viewModel.status)
                     .mediaStatusBarText(MediaStatusBarText(message: viewModel.status))
             }
-            Spacer()
-            Text("\(viewModel.selectedActionIDs.count) selected")
-                .lineLimit(1)
-                .foregroundStyle(.secondary)
-                .accessibilityLabel("Selected items: \(viewModel.selectedActionIDs.count)")
-            Text("\(viewModel.filteredItems.count) shown / \(viewModel.allItems.count) total")
-                .lineLimit(1)
-                .foregroundStyle(.secondary)
-                .accessibilityLabel("Shown items: \(viewModel.filteredItems.count) of \(viewModel.allItems.count)")
-            Text("Duplicate candidates \(viewModel.duplicatePlan.delete.count)")
-                .lineLimit(1)
-                .foregroundStyle(.secondary)
-                .help("Conservative duplicate candidates under the current name-kind-size rule.")
-                .accessibilityLabel("Duplicate candidates: \(viewModel.duplicatePlan.delete.count)")
+            Spacer(minLength: 0)
+            if plan.showsSelectedCount {
+                Text("\(viewModel.selectedActionIDs.count) selected")
+                    .mediaStatusBarLabel()
+                    .foregroundStyle(.secondary)
+                    .accessibilityLabel("Selected items: \(viewModel.selectedActionIDs.count)")
+            }
+            if plan.showsShownCount {
+                Text("\(viewModel.filteredItems.count) shown / \(viewModel.allItems.count) total")
+                    .mediaStatusBarLabel()
+                    .foregroundStyle(.secondary)
+                    .accessibilityLabel("Shown items: \(viewModel.filteredItems.count) of \(viewModel.allItems.count)")
+            }
+            if plan.showsDuplicateCount {
+                Text("Duplicate candidates \(viewModel.duplicatePlan.delete.count)")
+                    .mediaStatusBarLabel()
+                    .foregroundStyle(.secondary)
+                    .help("Conservative duplicate candidates under the current name-kind-size rule.")
+                    .accessibilityLabel("Duplicate candidates: \(viewModel.duplicatePlan.delete.count)")
+            }
         }
         .font(.caption)
+        .lineLimit(1)
+        // The structural guarantee. `fixedSize(horizontal:)` tells SwiftUI it may not
+        // resolve a too-narrow bar by wrapping text; combined with the fixed height on the
+        // container, content that does not fit is clipped and dropped by
+        // `MediaStatusBarLayout` instead of pushing the bar to a second line.
+        .fixedSize(horizontal: false, vertical: true)
         .padding(.horizontal, 12)
         .padding(.vertical, 6)
+        .frame(maxHeight: statusBarHeight)
+        .clipped()
         .accessibilityElement(children: .contain)
         .confirmationDialog(
             "Delete \(viewModel.pendingDeleteSnapshot?.items.count ?? 0) item(s) from this iPhone?",
