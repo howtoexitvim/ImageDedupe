@@ -56,6 +56,14 @@ final class MediaBrowserViewModel: ObservableObject {
     /// still only runs from the confirmed action, never from this flag.
     @Published var isConfirmingDelete = false
 
+    /// Actionable guidance for the most recent device failure, or `nil` when the last
+    /// operation succeeded. Drives the recovery banner.
+    @Published var recoveryAdvice: DeviceRecoveryAdvice?
+
+    func dismissRecoveryAdvice() {
+        recoveryAdvice = nil
+    }
+
     /// Set by the List renderer so a header click persists the new sort descriptor.
     var onSortChanged: ((MediaSortField, DeduperCore.SortOrder) -> Void)?
 
@@ -302,7 +310,9 @@ final class MediaBrowserViewModel: ObservableObject {
                 self.applyScanPayload(payload)
             } catch {
                 guard self.operationState.isCurrent(generation: generation) else { return }
-                self.status = "Scan failed: \(error)"
+                let advice = DeviceRecoveryAdvice.forFailure("\(error)")
+                self.recoveryAdvice = advice
+                self.status = advice.title
                 fputs("ui-scan-failed: \(error)\n", stderr)
                 self.operationState.fail()
             }
@@ -578,6 +588,7 @@ final class MediaBrowserViewModel: ObservableObject {
         flushPendingSearch()
         refreshVisibleOrder()
         importedItemIDs.removeAll()
+        recoveryAdvice = nil
         status = "Scanned \(payload.items.count) items. Conservative duplicates: \(payload.plan.delete.count)."
         fputs("ui-scan-succeeded: scanned=\(payload.items.count) duplicates=\(payload.plan.delete.count)\n", stderr)
         operationState.finish()
@@ -691,7 +702,9 @@ final class MediaBrowserViewModel: ObservableObject {
     }
 
     private func applyDeleteFailure(_ message: String) {
-        status = "Delete failed: \(message)"
+        let advice = DeviceRecoveryAdvice.forFailure(message)
+        recoveryAdvice = advice
+        status = "Delete failed: \(advice.title)"
         operationState.fail()
     }
 

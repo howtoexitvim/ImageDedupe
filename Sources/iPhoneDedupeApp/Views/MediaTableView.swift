@@ -367,6 +367,12 @@ struct MediaTableView: NSViewRepresentable {
                 rowView.isActionSelected = viewModel.selectedActionIDs.contains(item.id)
                 rowView.isFocusedItem = viewModel.selectedItemID == item.id
                 rowView.isBrowserFocused = viewModel.selection.focusOwner == .mediaBrowser
+                rowView.accessibilityDescription = MediaAccessibilityLabel.describe(
+                    item.model,
+                    isSelected: viewModel.selectedActionIDs.contains(item.id),
+                    isImported: viewModel.importedItemIDs.contains(item.id),
+                    isDuplicateCandidate: viewModel.duplicateDeleteIDs.contains(item.id)
+                )
             }
             return rowView
         }
@@ -444,7 +450,11 @@ struct MediaTableView: NSViewRepresentable {
 
 /// Formats a domain value for one column. Kept free of AppKit so it stays unit-testable.
 enum MediaTableText {
+    /// Uses the user's real locale and time zone; the tests inject their own.
+    private static let format = MediaDisplayFormat()
+
     static func value(for column: MediaTableColumn, item: DeviceMediaFile) -> String {
+        let format = Self.format
         switch column {
         case .selection, .thumbnail:
             return ""
@@ -453,13 +463,11 @@ enum MediaTableText {
         case .kind:
             return item.kind
         case .timestamp:
-            return item.timestamp ?? ""
+            return format.timestamp(item.timestamp) ?? ""
         case .size:
-            return ByteCountFormatter.string(fromByteCount: item.size, countStyle: .file)
+            return format.fileSize(item.size)
         case .duration:
-            guard let duration = item.duration else { return "" }
-            let totalSeconds = Int(duration.rounded())
-            return "\(totalSeconds / 60):\(String(format: "%02d", totalSeconds % 60))"
+            return format.duration(item.duration) ?? ""
         }
     }
 }

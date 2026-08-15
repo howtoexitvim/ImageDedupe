@@ -252,6 +252,17 @@ final class MediaTableRowView: NSTableRowView {
         didSet { if isBrowserFocused != oldValue { needsDisplay = true } }
     }
 
+    /// Spoken description of the row's item, shared with the Grid tile so VoiceOver
+    /// announces the same information in either renderer.
+    var accessibilityDescription: String? {
+        didSet {
+            guard let accessibilityDescription else { return }
+            setAccessibilityLabel(accessibilityDescription)
+            setAccessibilityRole(.row)
+            setAccessibilityElement(true)
+        }
+    }
+
     override func drawBackground(in dirtyRect: NSRect) {
         super.drawBackground(in: dirtyRect)
 

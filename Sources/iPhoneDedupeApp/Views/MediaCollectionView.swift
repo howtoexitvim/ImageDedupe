@@ -173,6 +173,12 @@ struct MediaCollectionView: NSViewRepresentable {
         ) {
             let item = items[index]
             viewModel.loadVisibleDetails(for: item)
+            view.accessibilityDescription = MediaAccessibilityLabel.describe(
+                item.model,
+                isSelected: actionSelected.contains(item.id),
+                isImported: viewModel.importedItemIDs.contains(item.id),
+                isDuplicateCandidate: viewModel.duplicateDeleteIDs.contains(item.id)
+            )
             view.configure(
                 name: item.model.name,
                 size: ByteCountFormatter.string(fromByteCount: item.model.size, countStyle: .file),

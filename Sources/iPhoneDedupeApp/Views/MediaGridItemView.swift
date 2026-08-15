@@ -134,7 +134,16 @@ final class MediaGridItemView: NSCollectionViewItem {
         container.isActionSelected = isActionSelected
         container.isFocusedItem = isFocused
         container.isBrowserFocused = isBrowserFocused
+
+        if let description = accessibilityDescription {
+            container.setAccessibilityLabel(description)
+            container.setAccessibilityRole(.group)
+            container.setAccessibilityElement(true)
+        }
     }
+
+    /// Supplied by the coordinator, which owns the domain model.
+    var accessibilityDescription: String?
 
     @objc private func toggleSelection() {
         onToggle?()

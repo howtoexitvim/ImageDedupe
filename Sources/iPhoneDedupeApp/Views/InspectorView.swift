@@ -1,3 +1,4 @@
+import DeduperCore
 import SwiftUI
 
 struct InspectorView: View {
@@ -64,13 +65,16 @@ struct InspectorView: View {
         .padding(14)
     }
 
+    /// The user's real locale and time zone.
+    private let format = MediaDisplayFormat()
+
     private func metadata(for item: MediaBrowserViewModel.MediaItem) -> some View {
         let metadata = viewModel.metadataSummary(for: item)
         return List {
             Section("Metadata") {
                 row("Kind", item.model.kind)
-                row("Size", ByteCountFormatter.string(fromByteCount: item.model.size, countStyle: .file))
-                row("Timestamp", item.model.timestamp ?? "Unknown")
+                row("Size", format.fileSize(item.model.size))
+                row("Timestamp", format.timestamp(item.model.timestamp) ?? "Unknown")
                 row("Width", item.model.width.map(String.init) ?? "Unknown")
                 row("Height", item.model.height.map(String.init) ?? "Unknown")
                 row("Location", metadata?.location ?? item.model.location ?? "Loading")
@@ -79,7 +83,7 @@ struct InspectorView: View {
                 row("Shutter", metadata?.shutterSpeed ?? "Loading")
                 row("Maker", metadata?.maker ?? "Loading")
                 row("Model", metadata?.model ?? "Loading")
-                row("Duration", durationText(item.model.duration))
+                row("Duration", format.duration(item.model.duration) ?? "Unknown")
                 row("RAW", item.model.isRaw ? "Yes" : "No")
                 row("High FPS", item.model.isHighFramerate ? "Yes" : "No")
                 row("Time Lapse", item.model.isTimeLapse ? "Yes" : "No")

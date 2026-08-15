@@ -36,6 +36,16 @@ struct MediaBrowserView: View {
                 )
         } detail: {
             VStack(spacing: 0) {
+                if let advice = viewModel.recoveryAdvice {
+                    RecoveryBanner(
+                        advice: advice,
+                        onRetry: {
+                            viewModel.dismissRecoveryAdvice()
+                            viewModel.scan()
+                        },
+                        onDismiss: { viewModel.dismissRecoveryAdvice() }
+                    )
+                }
                 mediaContent
                 Divider()
                 statusBar
@@ -178,6 +188,7 @@ struct MediaBrowserView: View {
                 )
                 .frame(width: 110)
                 .help("Thumbnail size")
+                .accessibilityLabel("Thumbnail size")
                 Image(systemName: "photo.fill")
                     .foregroundStyle(.secondary)
             }
@@ -188,6 +199,7 @@ struct MediaBrowserView: View {
                 Image(systemName: "sidebar.right")
             }
             .help(viewModel.isInspectorVisible ? "Hide inspector" : "Show inspector")
+            .accessibilityLabel(viewModel.isInspectorVisible ? "Hide inspector" : "Show inspector")
         }
     }
 
@@ -218,6 +230,7 @@ struct MediaBrowserView: View {
             }
             .buttonStyle(.borderless)
             .help("Reveal last imported file in Finder")
+            .accessibilityLabel("Reveal last imported file in Finder")
 
             Button("Delete") {
                 viewModel.requestDeleteConfirmation()
@@ -229,6 +242,8 @@ struct MediaBrowserView: View {
             Text(viewModel.status)
                 .lineLimit(1)
                 .layoutPriority(1)
+                .help(viewModel.status)
+                .accessibilityLabel("Status: \(viewModel.status)")
             Spacer()
             Text("\(viewModel.selectedActionIDs.count) selected")
                 .lineLimit(1)
