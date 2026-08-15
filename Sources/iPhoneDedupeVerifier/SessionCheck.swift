@@ -65,6 +65,13 @@ enum SessionCheck {
             let second = try await session.scan(timeout: .seconds(timeout))
             print("sessionScan2=\(second.files.count)")
 
+            // The app's verification path: a second helper's catalog must no longer list a
+            // file deleted through the first. Reported without deleting anything here.
+            let firstNames = Set(first.files.map(\.model.name))
+            let secondNames = Set(second.files.map(\.model.name))
+            print("verificationCatalogIsFresh=\(first.generation != second.generation)")
+            print("namesOnlyInFirst=\(firstNames.subtracting(secondNames).count)")
+
             let before = Set(first.files.map(\.model.name))
             let after = Set(second.files.map(\.model.name))
             print("added=\(after.subtracting(before).count) removed=\(before.subtracting(after).count)")

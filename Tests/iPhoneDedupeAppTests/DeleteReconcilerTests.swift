@@ -51,7 +51,10 @@ final class DeleteReconcilerTests: XCTestCase {
         XCTAssertEqual(audit.items.first?.reason, "locked")
     }
 
-    func testChangedHandleWithSameFingerprintIsAmbiguous() {
+    /// A file whose fingerprint is still in the catalog has not been removed, whatever
+    /// object handle it now sits under. The handle may change for reasons that have nothing
+    /// to do with this delete, so the fingerprint is what decides presence.
+    func testSameFingerprintUnderADifferentHandleIsStillPresent() {
         let item = plannedItem(handle: 1, name: "A.HEIC")
         let changed = DeletePlanSnapshot.Item(
             token: DeviceFileToken(
@@ -70,21 +73,28 @@ final class DeleteReconcilerTests: XCTestCase {
             catalog: catalog(containing: changed, generation: changed.token.generation)
         )
 
-        XCTAssertEqual(audit.items.first?.outcome, .ambiguous)
+        XCTAssertEqual(audit.items.first?.outcome, .stillPresent)
     }
 
-    func testReusedHandleWithDifferentFingerprintIsAmbiguous() {
+    /// The false failure reported on 2026-08-15.
+    ///
+    /// A PTP object handle is a slot, not an identity: once a file is deleted the device is
+    /// free to give its handle to something else, and routinely does. Treating an occupied
+    /// handle as evidence made three confirmed-successful deletes (`IMG_5090`, `IMG_5091`,
+    /// `WUAS3477` — each `exactMatches=0` on a fresh-process scan) report as "Ambiguous:
+    /// the device reused this object handle" or "Still present". Only the fingerprint's
+    /// absence decides removal.
+    func testReusedHandleForADifferentFileIsStillARemoval() {
         let item = plannedItem(handle: 1, name: "A.HEIC")
-        let replacement = plannedItem(handle: 1, name: "DIFFERENT.HEIC")
+        let unrelatedFileNowHoldingThatHandle = plannedItem(handle: 1, name: "DIFFERENT.HEIC")
 
         let audit = DeleteReconciler.reconcile(
             snapshot: DeletePlanSnapshot(deviceName: "iPhone", items: [item]),
             summary: DeviceGatewayDeleteSummary(successful: [item.token]),
-            catalog: catalog(containing: replacement, generation: UUID())
+            catalog: catalog(containing: unrelatedFileNowHoldingThatHandle, generation: UUID())
         )
 
-        XCTAssertEqual(audit.items.first?.outcome, .ambiguous)
-        XCTAssertTrue(audit.items.first?.reason?.contains("reused") == true)
+        XCTAssertEqual(audit.items.first?.outcome, .confirmedRemoved)
     }
 
     func testDifferentDeviceKeepsAuditPendingInsteadOfClaimingRemoval() {

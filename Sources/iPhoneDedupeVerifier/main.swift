@@ -285,10 +285,14 @@ private func deleteExactName(_ args: Arguments) async throws {
     let provenByCallback = matches.filter { observed.contains($0.token.objectHandle) }
     print("observedRemovalEvidence=\(provenByCallback.count) of \(matches.count)")
 
-    let after = try await scanWithRetry(gateway: gateway, timeout: args.timeout)
-    let remaining = after.files.filter { $0.model.name == targetName }
-    print("scannedAfter=\(after.files.count)")
-    print("remainingExactMatches=\(remaining.count)")
+    // Deliberately not rescanning on this gateway. ImageCaptureCore delivers a catalog once
+    // per device object, so an in-process scan after a delete replays the snapshot taken
+    // when the session opened and still lists the file that was just removed — measured
+    // reporting `remainingExactMatches=1` for a delete that a fresh process confirmed had
+    // worked. Only a new process can answer this, so the tool says so rather than printing
+    // a number that looks like evidence and is not.
+    print("postDeleteVerification=requires-fresh-process")
+    print("verifyWith=iPhoneDedupeVerifier find-exact-name --target-name \(targetName)")
 }
 
 @MainActor
