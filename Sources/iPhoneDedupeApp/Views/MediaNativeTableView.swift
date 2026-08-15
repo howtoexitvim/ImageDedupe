@@ -13,6 +13,16 @@ final class MediaNativeTableView: NSTableView {
 
     override var acceptsFirstResponder: Bool { true }
 
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        setAccessibilityLabel("Media list")
+    }
+
+    required init?(coder: NSCoder) {
+        super.init(coder: coder)
+        setAccessibilityLabel("Media list")
+    }
+
     /// The sidebar's SwiftUI `List` otherwise keeps first responder after launch, which
     /// sends the arrow keys to All Media/Duplicates instead of the media rows.
     override func viewDidMoveToWindow() {
@@ -250,6 +260,17 @@ final class MediaTableRowView: NSTableRowView {
     /// stronger when it does, so the user can tell where the arrow keys will land.
     var isBrowserFocused = false {
         didSet { if isBrowserFocused != oldValue { needsDisplay = true } }
+    }
+
+    /// Spoken description of the row's item, shared with the Grid tile so VoiceOver
+    /// announces the same information in either renderer.
+    var accessibilityDescription: String? {
+        didSet {
+            guard let accessibilityDescription else { return }
+            setAccessibilityLabel(accessibilityDescription)
+            setAccessibilityRole(.row)
+            setAccessibilityElement(true)
+        }
     }
 
     override func drawBackground(in dirtyRect: NSRect) {

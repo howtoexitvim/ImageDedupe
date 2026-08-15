@@ -139,4 +139,16 @@ final class MediaBrowserSelectionTests: XCTestCase {
         viewModel.prepareContextActionSelection(for: item("d"))
         XCTAssertEqual(viewModel.selectedActionIDs, ["d"])
     }
+
+    func testGridTileMarqueeUsesTheStartingItemsSelectionState() {
+        let viewModel = viewModel()
+        viewModel.toggleActionSelection(withID: "a")
+        viewModel.toggleActionSelection(withID: "b")
+        viewModel.toggleActionSelection(withID: "d")
+
+        viewModel.beginMarqueeSelection(startingAt: "b")
+        viewModel.updateMarqueeSelection(intersecting: ["b", "c", "d"])
+
+        XCTAssertEqual(viewModel.selectedActionIDs, ["a"])
+    }
 }

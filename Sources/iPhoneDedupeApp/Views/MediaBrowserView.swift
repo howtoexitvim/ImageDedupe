@@ -36,6 +36,16 @@ struct MediaBrowserView: View {
                 )
         } detail: {
             VStack(spacing: 0) {
+                if let advice = viewModel.recoveryAdvice {
+                    RecoveryBanner(
+                        advice: advice,
+                        onRetry: {
+                            viewModel.dismissRecoveryAdvice()
+                            viewModel.scan()
+                        },
+                        onDismiss: { viewModel.dismissRecoveryAdvice() }
+                    )
+                }
                 mediaContent
                 Divider()
                 statusBar
@@ -71,6 +81,14 @@ struct MediaBrowserView: View {
         .onReceive(NotificationCenter.default.publisher(for: .mediaResetLayout)) { _ in
             panePreferences.reset()
             columnVisibility = .all
+        }
+        .sheet(isPresented: $viewModel.isShowingOperationHistory) {
+            OperationHistoryView(
+                records: viewModel.operationHistory,
+                warning: viewModel.operationHistoryWarning,
+                onClear: { viewModel.clearOperationHistory() },
+                onDone: { viewModel.isShowingOperationHistory = false }
+            )
         }
     }
 
@@ -142,13 +160,18 @@ struct MediaBrowserView: View {
                     set: { viewModel.setViewMode($0) }
                 )
             ) {
-                Label("List", systemImage: "list.bullet").tag(MediaBrowserViewModel.ViewMode.list)
-                Label("Grid", systemImage: "square.grid.3x3").tag(MediaBrowserViewModel.ViewMode.grid)
+                Label("List", systemImage: "list.bullet")
+                    .accessibilityLabel("List view")
+                    .tag(MediaBrowserViewModel.ViewMode.list)
+                Label("Grid", systemImage: "square.grid.3x3")
+                    .accessibilityLabel("Grid view")
+                    .tag(MediaBrowserViewModel.ViewMode.grid)
             }
             .pickerStyle(.segmented)
             .labelsHidden()
             .frame(width: 132)
             .help("View mode")
+            .accessibilityLabel("View mode")
         }
 
         ToolbarItem(placement: .principal) {
@@ -178,6 +201,7 @@ struct MediaBrowserView: View {
                 )
                 .frame(width: 110)
                 .help("Thumbnail size")
+                .accessibilityLabel("Thumbnail size")
                 Image(systemName: "photo.fill")
                     .foregroundStyle(.secondary)
             }
@@ -188,6 +212,7 @@ struct MediaBrowserView: View {
                 Image(systemName: "sidebar.right")
             }
             .help(viewModel.isInspectorVisible ? "Hide inspector" : "Show inspector")
+            .accessibilityLabel(viewModel.isInspectorVisible ? "Hide inspector" : "Show inspector")
         }
     }
 
@@ -209,7 +234,7 @@ struct MediaBrowserView: View {
             Button("Import") {
                 viewModel.importSelected()
             }
-            .disabled(viewModel.selectedActionIDs.isEmpty)
+            .disabled(viewModel.selectedActionIDs.isEmpty || viewModel.isDeviceBusy)
 
             Button {
                 viewModel.revealLastImportInFinder()
@@ -218,30 +243,68 @@ struct MediaBrowserView: View {
             }
             .buttonStyle(.borderless)
             .help("Reveal last imported file in Finder")
+            .accessibilityLabel("Reveal last imported file in Finder")
 
             Button("Delete") {
                 viewModel.requestDeleteConfirmation()
             }
-            .disabled(viewModel.selectedActionIDs.isEmpty)
+            .disabled(viewModel.selectedActionIDs.isEmpty || viewModel.isDeviceBusy)
 
             Divider().frame(height: 16)
 
-            Text(viewModel.status)
-                .lineLimit(1)
-                .layoutPriority(1)
+            if !viewModel.operationHistory.isEmpty || viewModel.operationHistoryWarning != nil {
+                Button {
+                    viewModel.showOperationHistory()
+                } label: {
+                    Label("Results", systemImage: "list.bullet.rectangle")
+                }
+                .buttonStyle(.borderless)
+                .help("Review saved import and delete issues")
+                .accessibilityLabel("Review saved operation results")
+            }
+
+            if let progress = viewModel.operationProgress {
+                ProgressView(value: progress.fractionCompleted)
+                    .frame(width: 96)
+                    .accessibilityLabel(progress.kind == .importing ? "Import progress" : "Delete progress")
+                    .accessibilityValue("\(progress.completedItems) of \(progress.totalItems)")
+                Text(progress.detail)
+                    .lineLimit(1)
+                    .layoutPriority(1)
+                    .help(progress.detail)
+                    .accessibilityLabel("Operation status: \(progress.detail)")
+                Button(progress.isCanceling ? "Canceling…" : "Cancel") {
+                    viewModel.cancelCurrentOperation()
+                }
+                .controlSize(.small)
+                .disabled(!progress.canCancel)
+                .accessibilityHint("Stops after the device acknowledges cancellation")
+            } else {
+                Text(viewModel.status)
+                    .lineLimit(1)
+                    .layoutPriority(1)
+                    .help(viewModel.status)
+                    .accessibilityLabel("Status: \(viewModel.status)")
+            }
             Spacer()
             Text("\(viewModel.selectedActionIDs.count) selected")
                 .lineLimit(1)
+                .foregroundStyle(.secondary)
+                .accessibilityLabel("Selected items: \(viewModel.selectedActionIDs.count)")
             Text("\(viewModel.filteredItems.count) shown / \(viewModel.allItems.count) total")
                 .lineLimit(1)
+                .foregroundStyle(.secondary)
+                .accessibilityLabel("Shown items: \(viewModel.filteredItems.count) of \(viewModel.allItems.count)")
             Text("Duplicate candidates \(viewModel.duplicatePlan.delete.count)")
                 .lineLimit(1)
+                .foregroundStyle(.secondary)
                 .help("Conservative duplicate candidates under the current name-kind-size rule.")
+                .accessibilityLabel("Duplicate candidates: \(viewModel.duplicatePlan.delete.count)")
         }
         .font(.caption)
-        .foregroundStyle(.secondary)
         .padding(.horizontal, 12)
         .padding(.vertical, 6)
+        .accessibilityElement(children: .contain)
         .confirmationDialog(
             "Delete \(viewModel.selectedActionIDs.count) item(s) from this iPhone?",
             isPresented: $viewModel.isConfirmingDelete,

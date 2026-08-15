@@ -56,6 +56,34 @@ final class MediaBrowserViewModel: ObservableObject {
     /// still only runs from the confirmed action, never from this flag.
     @Published var isConfirmingDelete = false
 
+    /// Actionable guidance for the most recent device failure, or `nil` when the last
+    /// operation succeeded. Drives the recovery banner.
+    @Published var recoveryAdvice: DeviceRecoveryAdvice?
+
+    @Published private(set) var operationHistory: [OperationResultRecord] = []
+    @Published private(set) var operationHistoryWarning: String?
+    @Published var isShowingOperationHistory = false
+    private let operationResultStore: OperationResultStore
+    typealias ImportPreflight = (URL, [ImportDestinationPreflight.Item]) -> ImportDestinationPreflight.Outcome
+    private let importPreflight: ImportPreflight
+
+    init(
+        operationResultStore: OperationResultStore = .applicationSupport(),
+        importPreflight: @escaping ImportPreflight = { destination, items in
+            ImportDestinationPreflight.inspect(destination: destination, items: items)
+        }
+    ) {
+        self.operationResultStore = operationResultStore
+        self.importPreflight = importPreflight
+        let loaded = operationResultStore.load()
+        operationHistory = loaded.records
+        operationHistoryWarning = loaded.warning
+    }
+
+    func dismissRecoveryAdvice() {
+        recoveryAdvice = nil
+    }
+
     /// Set by the List renderer so a header click persists the new sort descriptor.
     var onSortChanged: ((MediaSortField, DeduperCore.SortOrder) -> Void)?
 
@@ -123,6 +151,8 @@ final class MediaBrowserViewModel: ObservableObject {
     /// One admission gate for every device operation. Replaces the old `isScanning` flag,
     /// which guarded only scan and left import and delete able to overlap each other.
     @Published private(set) var operationState = DeviceOperationState()
+    @Published private(set) var operationProgress: MediaOperationProgress?
+    private var operationCancellation: DeviceOperationCancellation?
 
     /// Kept as a projection so existing views and tests read unchanged.
     var isScanning: Bool { operationState.current == .scanning }
@@ -302,7 +332,9 @@ final class MediaBrowserViewModel: ObservableObject {
                 self.applyScanPayload(payload)
             } catch {
                 guard self.operationState.isCurrent(generation: generation) else { return }
-                self.status = "Scan failed: \(error)"
+                let advice = DeviceRecoveryAdvice.forFailure("\(error)")
+                self.recoveryAdvice = advice
+                self.status = advice.title
                 fputs("ui-scan-failed: \(error)\n", stderr)
                 self.operationState.fail()
             }
@@ -342,6 +374,12 @@ final class MediaBrowserViewModel: ObservableObject {
     func beginMarqueeSelection(additive: Bool, deselecting: Bool = false) {
         refreshVisibleOrder()
         selection.beginMarqueeSelection(additive: additive, deselecting: deselecting)
+    }
+
+    /// Starts a Grid marquee from a tile, mirroring List's start-item select/deselect rule.
+    func beginMarqueeSelection(startingAt id: String) {
+        refreshVisibleOrder()
+        selection.beginMarqueeSelection(startingAt: id)
     }
 
     func updateMarqueeSelection(intersecting ids: Set<String>) {
@@ -447,16 +485,39 @@ final class MediaBrowserViewModel: ObservableObject {
             status = "Select one or more items to import."
             return
         }
+        guard !operationState.isBusy else {
+            status = "\(operationState.current.verb) already in progress."
+            return
+        }
+        let preflightItems = items.map {
+            ImportDestinationPreflight.Item(filename: $0.model.name, size: $0.model.size)
+        }
+        if case let .blocked(failure) = importPreflight(importDestination, preflightItems) {
+            status = "Import blocked: \(failure.message)"
+            return
+        }
         // Previously unguarded: a second Import, or an Import during a Delete, would both
         // reach the device concurrently.
         guard operationState.begin(.importing) else {
             status = "\(operationState.current.verb) already in progress."
             return
         }
+        let cancellation = DeviceOperationCancellation()
+        operationCancellation = cancellation
+        operationProgress = MediaOperationProgress(kind: .importing, totalItems: items.count)
         status = "Importing \(items.count) item(s)..."
         Task.detached(priority: .userInitiated) { [weak self, destination = importDestination] in
             guard let self else { return }
-            let summary = DeviceImportController(timeoutSeconds: 120).importFiles(items.map(\.cameraFile), to: destination)
+            let summary = DeviceImportController(timeoutSeconds: 120).importFiles(
+                items.map(\.cameraFile),
+                to: destination,
+                cancellation: cancellation,
+                onProgress: { update in
+                    Task { @MainActor [weak self] in
+                        self?.applyOperationProgress(update, for: .importing)
+                    }
+                }
+            )
             await self.applyImportSummary(summary, destination: destination, requestedItems: items)
         }
     }
@@ -473,6 +534,9 @@ final class MediaBrowserViewModel: ObservableObject {
             status = "\(operationState.current.verb) already in progress."
             return
         }
+        let cancellation = DeviceOperationCancellation()
+        operationCancellation = cancellation
+        operationProgress = MediaOperationProgress(kind: .deleting, totalItems: items.count)
         status = "Deleting \(items.count) item(s)..."
         Task.detached(priority: .userInitiated) { [weak self] in
             guard let self else { return }
@@ -481,11 +545,45 @@ final class MediaBrowserViewModel: ObservableObject {
                 return
             }
             do {
-                let summary = try DeviceSessionController(timeoutSeconds: 120).delete(items.map(\.cameraFile), from: device, confirmed: true)
-                await self.applyDeleteSummary(summary, requestedIDs: Set(items.map(\.id)))
+                let summary = try DeviceSessionController(timeoutSeconds: 120).delete(
+                    items.map(\.cameraFile),
+                    from: device,
+                    confirmed: true,
+                    cancellation: cancellation,
+                    onProgress: { update in
+                        Task { @MainActor [weak self] in
+                            self?.applyOperationProgress(update, for: .deleting)
+                        }
+                    }
+                )
+                await self.applyDeleteSummary(summary, requestedItems: items)
             } catch {
                 await self.applyDeleteFailure("\(error)")
             }
+        }
+    }
+
+    func cancelCurrentOperation() {
+        guard var progress = operationProgress,
+              progress.requestCancellation() else {
+            return
+        }
+        operationProgress = progress
+        status = progress.detail
+        _ = operationCancellation?.cancel()
+    }
+
+    func showOperationHistory() {
+        isShowingOperationHistory = true
+    }
+
+    func clearOperationHistory() {
+        do {
+            try operationResultStore.clear()
+            operationHistory = []
+            operationHistoryWarning = nil
+        } catch {
+            operationHistoryWarning = "Saved operation results could not be cleared: \(error.localizedDescription)"
         }
     }
 
@@ -578,6 +676,7 @@ final class MediaBrowserViewModel: ObservableObject {
         flushPendingSearch()
         refreshVisibleOrder()
         importedItemIDs.removeAll()
+        recoveryAdvice = nil
         status = "Scanned \(payload.items.count) items. Conservative duplicates: \(payload.plan.delete.count)."
         fputs("ui-scan-succeeded: scanned=\(payload.items.count) duplicates=\(payload.plan.delete.count)\n", stderr)
         operationState.finish()
@@ -675,11 +774,29 @@ final class MediaBrowserViewModel: ObservableObject {
             .filter { successfulHandles.contains($0.cameraFile.ptpObjectHandle) }
             .map(\.id)
         importedItemIDs.formUnion(successfulIDs)
-        status = "Imported \(summary.successful.count) item(s), \(summary.failed.count) failed."
+        status = "Imported \(summary.successful.count) item(s), \(summary.failed.count) failed, \(summary.canceled.count) canceled."
+        persistOperationResult(OperationResultRecord(
+            id: UUID(),
+            date: Date(),
+            kind: .importing,
+            destinationPath: destination.path,
+            requestedCount: requestedItems.count,
+            successfulCount: summary.successful.count,
+            failures: summary.failed.map { failure in
+                OperationResultRecord.Failure(
+                    filename: failure.file.name ?? "Unknown file",
+                    reason: failure.error.localizedDescription
+                )
+            },
+            canceledFilenames: summary.canceled.map { $0.name ?? "Unknown file" }
+        ))
+        operationProgress = nil
+        operationCancellation = nil
         operationState.finish()
     }
 
-    private func applyDeleteSummary(_ summary: DeviceDeleteSummary, requestedIDs: Set<String>) {
+    private func applyDeleteSummary(_ summary: DeviceDeleteSummary, requestedItems: [MediaItem]) {
+        let requestedIDs = Set(requestedItems.map(\.id))
         let successfulHandles = Set(summary.successful.map(\.ptpObjectHandle))
         allItems.removeAll { item in
             requestedIDs.contains(item.id) && successfulHandles.contains(item.cameraFile.ptpObjectHandle)
@@ -687,12 +804,59 @@ final class MediaBrowserViewModel: ObservableObject {
         duplicatePlan = DuplicatePlanner.plan(files: allItems.map(\.model), rule: .nameKindSize)
         refreshVisibleOrder()
         status = "Deleted \(summary.successful.count) item(s), \(summary.failed.count) failed, \(summary.canceled.count) canceled."
+        let failureReason = summary.error?.localizedDescription ?? "The device did not delete this item."
+        persistOperationResult(OperationResultRecord(
+            id: UUID(),
+            date: Date(),
+            kind: .deleting,
+            destinationPath: nil,
+            requestedCount: requestedItems.count,
+            successfulCount: summary.successful.count,
+            failures: summary.failed.map {
+                OperationResultRecord.Failure(
+                    filename: $0.name ?? "Unknown file",
+                    reason: failureReason
+                )
+            },
+            canceledFilenames: summary.canceled.map { $0.name ?? "Unknown file" }
+        ))
+        operationProgress = nil
+        operationCancellation = nil
         operationState.finish()
     }
 
     private func applyDeleteFailure(_ message: String) {
-        status = "Delete failed: \(message)"
+        let advice = DeviceRecoveryAdvice.forFailure(message)
+        recoveryAdvice = advice
+        status = "Delete failed: \(advice.title)"
+        operationProgress = nil
+        operationCancellation = nil
         operationState.fail()
+    }
+
+    private func applyOperationProgress(
+        _ update: DeviceBatchProgress,
+        for operation: DeviceOperationState.Operation
+    ) {
+        guard operationState.current == operation,
+              var progress = operationProgress else {
+            return
+        }
+        progress.apply(update)
+        operationProgress = progress
+        status = progress.detail
+    }
+
+    private func persistOperationResult(_ record: OperationResultRecord) {
+        guard record.hasIssues else { return }
+        do {
+            operationHistory = try operationResultStore.append(record)
+            operationHistoryWarning = nil
+            isShowingOperationHistory = true
+        } catch {
+            operationHistoryWarning = "This result could not be saved: \(error.localizedDescription)"
+            status += " The detailed result could not be saved."
+        }
     }
 
     private func trimMetadataCacheIfNeeded() {

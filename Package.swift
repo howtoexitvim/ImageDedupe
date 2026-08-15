@@ -34,7 +34,7 @@ let package = Package(
         ),
         .testTarget(
             name: "iPhoneDedupeAppTests",
-            dependencies: ["iPhoneDedupeApp"]
+            dependencies: ["iPhoneDedupeApp", "DeviceMediaKit"]
         ),
     ]
 )

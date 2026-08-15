@@ -255,6 +255,21 @@ struct MediaSelectionState: Equatable {
         endExtension()
     }
 
+    /// Starts a Grid marquee on a tile, using the same start-item rule as List dragging.
+    /// An unselected starting item makes the rectangle additive; a selected starting item
+    /// makes it subtractive. The mode stays fixed for the lifetime of this drag.
+    mutating func beginMarqueeSelection(startingAt id: String) {
+        guard contains(id) else { return }
+        focusOwner = .mediaBrowser
+        focusedID = id
+        anchorID = id
+        isDragDeselecting = actionSelectedIDs.contains(id)
+        dragBaseSelection = actionSelectedIDs
+        dragOriginID = nil
+        isMarqueeSelecting = true
+        endExtension()
+    }
+
     /// Replaces the marquee's contribution with the items it currently intersects, leaving
     /// any pre-drag selection intact. Shrinking the marquee therefore deselects only what
     /// the marquee itself added.

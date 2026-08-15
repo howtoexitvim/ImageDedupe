@@ -22,6 +22,7 @@ struct NativeSearchField: NSViewRepresentable {
         searchField.isEnabled = true
         searchField.focusRingType = .default
         searchField.setAccessibilityIdentifier("media-search-field")
+        searchField.setAccessibilityLabel("Search media")
         return searchField
     }
 

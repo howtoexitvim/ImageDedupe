@@ -51,6 +51,11 @@ final class MediaGridItemView: NSCollectionViewItem {
 
         checkbox.target = self
         checkbox.action = #selector(toggleSelection)
+        // Grid navigation belongs to the collection view: arrows move focus and Space
+        // toggles the focused tile. Keeping every visible checkbox out of the Tab chain
+        // prevents Full Keyboard Access from walking thousands of duplicate controls.
+        // The checkbox remains in the accessibility hierarchy for VoiceOver actions.
+        checkbox.refusesFirstResponder = true
         checkbox.translatesAutoresizingMaskIntoConstraints = false
         container.addSubview(checkbox)
 
@@ -134,7 +139,16 @@ final class MediaGridItemView: NSCollectionViewItem {
         container.isActionSelected = isActionSelected
         container.isFocusedItem = isFocused
         container.isBrowserFocused = isBrowserFocused
+
+        if let description = accessibilityDescription {
+            container.setAccessibilityLabel(description)
+            container.setAccessibilityRole(.group)
+            container.setAccessibilityElement(true)
+        }
     }
+
+    /// Supplied by the coordinator, which owns the domain model.
+    var accessibilityDescription: String?
 
     @objc private func toggleSelection() {
         onToggle?()

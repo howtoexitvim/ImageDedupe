@@ -1,10 +1,7 @@
 import AppKit
 
-/// `NSCollectionView` subclass that routes native key and click events into the shared
-/// selection model, using four-direction navigation.
-///
-/// Rubber-band selection is intentionally absent. It was dropped on 2026-08-15; Shift,
-/// Command, double-click, and the keyboard cover multi-selection.
+/// `NSCollectionView` subclass that routes native key, click, and marquee events into the
+/// shared selection model, using four-direction navigation.
 @MainActor
 final class MediaNativeCollectionView: NSCollectionView {
     weak var coordinator: MediaCollectionView.Coordinator?
@@ -15,6 +12,16 @@ final class MediaNativeCollectionView: NSCollectionView {
     private var marqueeAnchor: NSPoint?
 
     override var acceptsFirstResponder: Bool { true }
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        setAccessibilityLabel("Media grid")
+    }
+
+    required init?(coder: NSCoder) {
+        super.init(coder: coder)
+        setAccessibilityLabel("Media grid")
+    }
 
     /// The sidebar's SwiftUI list otherwise keeps first responder, which sends the arrow
     /// keys to All Media/Duplicates instead of the media tiles.
@@ -123,7 +130,19 @@ final class MediaNativeCollectionView: NSCollectionView {
             return
         }
 
-        coordinator.click(index: index, modifiers: MediaTableController.Modifiers(event.modifierFlags))
+        let modifiers = MediaTableController.Modifiers(event.modifierFlags)
+        guard !modifiers.contains(.shift), let id = coordinator.itemID(at: index) else {
+            coordinator.click(index: index, modifiers: modifiers)
+            return
+        }
+
+        // Delay the click until mouse-up so a tile drag can decide its mode from the
+        // selection as it stood when the gesture began. This avoids a Command-click toggle
+        // changing the start state before the drag is classified.
+        let didDrag = trackMarquee(startingAt: point, startingItemID: id, initialEvent: event)
+        if !didDrag {
+            coordinator.click(index: index, modifiers: modifiers)
+        }
     }
 
     // MARK: - Marquee selection
@@ -132,8 +151,13 @@ final class MediaNativeCollectionView: NSCollectionView {
     ///
     /// The anchor is kept in document coordinates so the marquee stays pinned to content
     /// while auto-scroll moves the viewport underneath it.
-    private func trackMarquee(startingAt anchor: NSPoint, initialEvent: NSEvent) {
-        guard let coordinator else { return }
+    @discardableResult
+    private func trackMarquee(
+        startingAt anchor: NSPoint,
+        startingItemID: String? = nil,
+        initialEvent: NSEvent
+    ) -> Bool {
+        guard let coordinator else { return false }
         let origin = initialEvent.locationInWindow
         var didBegin = false
 
@@ -146,12 +170,16 @@ final class MediaNativeCollectionView: NSCollectionView {
                     event.locationInWindow.y - origin.y
                 )
                 guard travelled >= MediaTableMetrics.dragActivationDistance else { continue }
-                let modifiers = MediaTableController.Modifiers(event.modifierFlags)
-                // Option-drag removes from the selection, matching Finder.
-                coordinator.viewModel.beginMarqueeSelection(
-                    additive: modifiers.contains(.command) || modifiers.contains(.shift),
-                    deselecting: modifiers.contains(.option)
-                )
+                if let startingItemID {
+                    coordinator.viewModel.beginMarqueeSelection(startingAt: startingItemID)
+                } else {
+                    let modifiers = MediaTableController.Modifiers(event.modifierFlags)
+                    // Option-drag from blank canvas removes; a plain blank marquee adds.
+                    coordinator.viewModel.beginMarqueeSelection(
+                        additive: modifiers.contains(.command) || modifiers.contains(.shift),
+                        deselecting: modifiers.contains(.option)
+                    )
+                }
                 marqueeAnchor = anchor
                 didBegin = true
             }
@@ -176,6 +204,7 @@ final class MediaNativeCollectionView: NSCollectionView {
             marqueeAnchor = nil
             coordinator.refreshVisibleDecoration()
         }
+        return didBegin
     }
 
     private func updateMarquee(to point: NSPoint) {
