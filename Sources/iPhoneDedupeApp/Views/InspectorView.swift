@@ -97,8 +97,32 @@ struct InspectorView: View {
                 row("Group UUID", item.model.groupUUID ?? "Unknown")
                 row("Burst UUID", item.model.burstUUID ?? "Unknown")
             }
-            Section("Duplicate Dry Run") {
-                row("Rule", "name-kind-size")
+            Section("Duplicates") {
+                // This file's own status first: the badges are a glance, and this is where
+                // the user decides, so the same thing is stated in words.
+                let status = viewModel.duplicateStatus(forItemID: item.id)
+                HStack(spacing: 6) {
+                    switch status {
+                    case .notDuplicated:
+                        Image(systemName: "checkmark.circle")
+                            .foregroundStyle(.secondary)
+                    case .keptCopy:
+                        Image(systemName: "checkmark.seal.fill")
+                            .foregroundStyle(.blue)
+                    case .redundantCopy:
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .foregroundStyle(.orange)
+                    }
+                    Text(status.title)
+                }
+                Text(status.detail)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                // The rule was hardcoded as "name-kind-size" and no longer reflected the
+                // chooser, so the inspector could describe a rule the user had changed.
+                row("Rule", viewModel.duplicateRule.summary)
                 row("Duplicate candidates", "\(viewModel.duplicatePlan.delete.count)")
                 row("Estimated space", ByteCountFormatter.string(fromByteCount: viewModel.duplicateBytes, countStyle: .file))
                 Text("Deletion requires explicit confirmation.")

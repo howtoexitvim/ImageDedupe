@@ -42,17 +42,24 @@ struct DeviceCatalogIndex {
     /// Model ids already used, so the catalog cannot contain two files sharing one.
     private var usedModelIDs: Set<String> = []
 
+    /// Adds a file to the catalog. Only an exact re-report of the *same* framework entry is
+    /// rejected; two genuinely separate files are always both kept.
+    ///
+    /// This used to drop any file whose token repeated. On a device where ImageCaptureCore
+    /// assigns no object handles — every entry carries the unassigned `0` — a token
+    /// degenerates to its fingerprint, so two real files with the same name, kind, size, and
+    /// timestamp collided and the second was discarded. Measured on 2026-08-16: the
+    /// framework listed 3,978 entries and the catalog kept 3,952.
+    ///
+    /// Those 26 were duplicates, which is precisely what this app exists to find. Dropping
+    /// them is worse than any display fault: the user is told they have no duplicates exactly
+    /// when they do. Uniqueness is still guaranteed, but by disambiguating ids rather than by
+    /// throwing files away.
     mutating func insert(_ file: DeviceCatalogFile) -> Bool {
-        guard filenamesByToken[file.token] == nil else { return false }
-
         // The UI keys dictionaries by `model.id`, and `Dictionary(uniqueKeysWithValues:)`
-        // traps on a repeat — the crash reported on 2026-08-15 after deleting several
-        // photos, where two files shared the unassigned object handle `0` and a name.
-        //
-        // `DeviceMediaFileIdentity` avoids that for every case it can see, but it is handed
-        // one file at a time and cannot know what the rest of the catalog contains. This is
-        // the only place with that view, so uniqueness is guaranteed here rather than
-        // assumed: a device quirk must never be able to crash the app.
+        // traps on a repeat — the crash reported on 2026-08-15. `DeviceMediaFileIdentity` is
+        // handed one file at a time and cannot see the rest of the catalog; this is the only
+        // place that can, so uniqueness is guaranteed here.
         var resolved = file
         if usedModelIDs.contains(file.model.id) {
             var candidate = file.model.id
@@ -69,7 +76,12 @@ struct DeviceCatalogIndex {
 
         usedModelIDs.insert(resolved.model.id)
         files.append(resolved)
-        filenamesByToken[resolved.token] = resolved.model.name
+        // Keyed by token, so download and delete can still resolve a filename. Where two
+        // files share a token the first name wins; they are identical by definition of the
+        // fingerprint, so the value is the same either way.
+        if filenamesByToken[resolved.token] == nil {
+            filenamesByToken[resolved.token] = resolved.model.name
+        }
         return true
     }
 }

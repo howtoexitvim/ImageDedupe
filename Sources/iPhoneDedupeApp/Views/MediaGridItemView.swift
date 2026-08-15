@@ -135,8 +135,8 @@ final class MediaGridItemView: NSCollectionViewItem {
         checkbox.setAccessibilityLabel("Select \(name)")
         importedBadge.isHidden = !isImported
         // One badge, two meanings, so the tile gains no extra layout: the copy that will
-        // survive is marked distinctly from the copies that will go. Both copies of a
-        // duplicate are now shown, so telling them apart at a glance is the whole point.
+        // survive is marked distinctly from the copies that will go. Both are shown in a
+        // duplicate group, so telling them apart at a glance is the point.
         if isKeptCopy {
             duplicateBadge.image = NSImage(
                 systemSymbolName: "checkmark.seal.fill",
@@ -154,6 +154,7 @@ final class MediaGridItemView: NSCollectionViewItem {
             duplicateBadge.toolTip = "A duplicate of a copy kept elsewhere."
             duplicateBadge.isHidden = !isDuplicateCandidate
         }
+
         self.onToggle = onToggle
 
         container.isActionSelected = isActionSelected

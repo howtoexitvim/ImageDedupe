@@ -486,7 +486,8 @@ struct MediaTableView: NSViewRepresentable {
                 image: viewModel.thumbnailCache[item.id],
                 side: CGFloat(viewModel.displayScale.listThumbnailSide),
                 isImported: viewModel.importedItemIDs.contains(item.id),
-                isDuplicateCandidate: viewModel.duplicateDeleteIDs.contains(item.id)
+                isDuplicateCandidate: viewModel.duplicateDeleteIDs.contains(item.id),
+                isKeptCopy: viewModel.keptDuplicateIDs.contains(item.id)
             )
             return cell
         }

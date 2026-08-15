@@ -16,7 +16,12 @@ import XCTest
 /// time. `DeviceCatalogIndex` is the only place with a view of the whole catalog, so the
 /// guarantee lives there: no device quirk may be able to crash the app.
 final class CatalogIdentityUniquenessTests: XCTestCase {
-    private func catalogFile(id: String, name: String, handle: UInt32) -> DeviceCatalogFile {
+    private func catalogFile(
+        id: String,
+        name: String,
+        handle: UInt32,
+        generation: UUID = UUID()
+    ) -> DeviceCatalogFile {
         DeviceCatalogFile(
             model: DeviceMediaFile(
                 id: id,
@@ -28,7 +33,7 @@ final class CatalogIdentityUniquenessTests: XCTestCase {
                 height: nil
             ),
             token: DeviceFileToken(
-                generation: UUID(),
+                generation: generation,
                 objectHandle: handle,
                 fingerprint: DeviceFileFingerprint(
                     name: name,
@@ -77,14 +82,70 @@ final class CatalogIdentityUniquenessTests: XCTestCase {
         XCTAssertEqual(index.files.map(\.model.id), ["7-A.JPG", "8-B.JPG"])
     }
 
-    /// The existing token-level de-duplication still applies: the same token twice is one
-    /// file reported twice, not two files.
-    func testARepeatedTokenIsStillRejected() {
+    /// Token-level de-duplication was **removed** on 2026-08-16, deliberately.
+    ///
+    /// It assumed a repeated token meant the framework had reported one file twice. On a
+    /// device that assigns no object handles that assumption is false: a token degenerates
+    /// to its fingerprint, so two real duplicates share one. Dropping the second hid exactly
+    /// the files this app exists to find — 26 of them on the reporting user's device.
+    ///
+    /// The catalog now keeps both and disambiguates their ids instead. Over-reporting a
+    /// duplicate is recoverable — the user sees two rows and decides — whereas silently
+    /// discarding one is not: nothing downstream can recover a file the catalog never
+    /// mentioned.
+    func testTwoEntriesWithOneTokenAreBothKeptWithDistinctIDs() {
         var index = DeviceCatalogIndex()
         let file = catalogFile(id: "7-A.JPG", name: "A.JPG", handle: 7)
 
         XCTAssertTrue(index.insert(file))
-        XCTAssertFalse(index.insert(file), "The same token is the same file.")
-        XCTAssertEqual(index.files.count, 1)
+        XCTAssertTrue(index.insert(file))
+        XCTAssertEqual(index.files.count, 2)
+        XCTAssertEqual(Set(index.files.map(\.model.id)).count, 2)
+    }
+
+    /// The 26 missing files reported on 2026-08-16.
+    ///
+    /// Image Capture listed 3,978 entries where the app kept 3,952. Every file on that
+    /// device carries the unassigned object handle `0`, so a token degenerates to its
+    /// fingerprint alone — and two genuinely separate files with the same name, kind, size,
+    /// and timestamp then share a token, so the second was dropped as a repeat.
+    ///
+    /// Those are exactly the files this app exists to find. Dropping a duplicate before the
+    /// planner sees it is worse than any display bug: the user is told they have no
+    /// duplicates precisely when they do.
+    func testTwoDistinctFilesSharingATokenAreBothKept() {
+        var index = DeviceCatalogIndex()
+        // One generation, as a real scan has: with every handle 0 the tokens are then
+        // byte-identical, which is what made the second file vanish.
+        let generation = UUID()
+        let first = catalogFile(id: "0-A.JPG", name: "A.JPG", handle: 0, generation: generation)
+        let second = catalogFile(id: "0-A.JPG", name: "A.JPG", handle: 0, generation: generation)
+
+        XCTAssertTrue(index.insert(first))
+        XCTAssertTrue(
+            index.insert(second),
+            "A second file with the same token is a duplicate to report, not a repeat to drop."
+        )
+        XCTAssertEqual(index.files.count, 2)
+        XCTAssertEqual(Set(index.files.map(\.model.id)).count, 2, "Ids must still be unique.")
+    }
+
+    /// The catalog must survive being keyed by id, which is what forced the de-duplication
+    /// in the first place. Both properties have to hold at once.
+    func testBothCopiesSurviveAndTheCatalogStillKeysByID() {
+        var index = DeviceCatalogIndex()
+        let generation = UUID()
+        for _ in 0..<4 {
+            _ = index.insert(catalogFile(
+                id: "0-SAME.JPG",
+                name: "SAME.JPG",
+                handle: 0,
+                generation: generation
+            ))
+        }
+
+        XCTAssertEqual(index.files.count, 4, "Four real files, four rows.")
+        let byID = Dictionary(uniqueKeysWithValues: index.files.map { ($0.model.id, $0) })
+        XCTAssertEqual(byID.count, 4)
     }
 }

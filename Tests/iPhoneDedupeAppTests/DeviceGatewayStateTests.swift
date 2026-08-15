@@ -27,7 +27,7 @@ final class DeviceGatewayStateTests: XCTestCase {
         XCTAssertEqual(received, "IMG_0001.HEIC")
     }
 
-    func testCatalogIndexDropsRepeatedFrameworkTokenWithoutTrapping() {
+    func testCatalogIndexKeepsBothFilesSharingATokenWithoutTrapping() {
         let generation = UUID()
         let token = DeviceFileToken(
             generation: generation,
@@ -49,9 +49,15 @@ final class DeviceGatewayStateTests: XCTestCase {
         )
         var index = DeviceCatalogIndex()
 
+        // Both are kept. A shared token no longer implies one file reported twice: on a
+        // device that assigns no object handles, a token degenerates to its fingerprint, so
+        // two real duplicates share one. Dropping the second hid the very files this app
+        // exists to find — 26 of them on the device reported on 2026-08-16.
         XCTAssertTrue(index.insert(first))
-        XCTAssertFalse(index.insert(repeated))
-        XCTAssertEqual(index.files, [first])
+        XCTAssertTrue(index.insert(repeated))
+        XCTAssertEqual(index.files.count, 2)
+        XCTAssertEqual(Set(index.files.map(\.model.id)).count, 2, "Ids stay unique.")
+        // The token still resolves to a filename for download and delete.
         XCTAssertEqual(index.filenamesByToken, [token: "IMG_0042.HEIC"])
     }
 

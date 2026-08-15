@@ -133,10 +133,36 @@ final class MediaThumbnailCellView: NSTableCellView {
         fatalError("init(coder:) is not used")
     }
 
-    func configure(image: NSImage?, side: CGFloat, isImported: Bool, isDuplicateCandidate: Bool) {
+    func configure(
+        image: NSImage?,
+        side: CGFloat,
+        isImported: Bool,
+        isDuplicateCandidate: Bool,
+        isKeptCopy: Bool = false
+    ) {
         thumbnail.image = image ?? NSImage(systemSymbolName: "photo", accessibilityDescription: "No preview yet")
         importedBadge.isHidden = !isImported
-        duplicateBadge.isHidden = !isDuplicateCandidate
+
+        // The same two meanings as the Grid tile, so a duplicate group reads identically in
+        // either view: blue seal for the copy that survives, orange triangle for the copies
+        // Delete would remove. One badge view, so the row gains no extra layout.
+        if isKeptCopy {
+            duplicateBadge.image = NSImage(
+                systemSymbolName: "checkmark.seal.fill",
+                accessibilityDescription: "Kept copy"
+            )
+            duplicateBadge.contentTintColor = .systemBlue
+            duplicateBadge.toolTip = "This copy is kept."
+            duplicateBadge.isHidden = false
+        } else {
+            duplicateBadge.image = NSImage(
+                systemSymbolName: "exclamationmark.triangle.fill",
+                accessibilityDescription: "Duplicate candidate"
+            )
+            duplicateBadge.contentTintColor = .systemOrange
+            duplicateBadge.toolTip = "A duplicate of a copy kept elsewhere."
+            duplicateBadge.isHidden = !isDuplicateCandidate
+        }
 
         NSLayoutConstraint.deactivate(sideConstraints)
         sideConstraints = [

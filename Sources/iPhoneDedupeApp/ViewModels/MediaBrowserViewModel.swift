@@ -104,6 +104,51 @@ final class MediaBrowserViewModel: ObservableObject {
     /// hundred decisions.
     @Published private(set) var duplicateGroups: [DuplicateGrouping.Group] = []
 
+    /// What the inspector says about one file's duplicate status.
+    ///
+    /// The tile badges are a glance; the inspector is where the decision is made, so it
+    /// states the same thing in words — which copy survives, which would be removed, and how
+    /// many copies of *this* file exist.
+    enum DuplicateStatus: Equatable {
+        case notDuplicated
+        /// The copy that survives a delete of this group.
+        case keptCopy(copies: Int)
+        /// A copy Delete would remove, because an identical one is kept.
+        case redundantCopy(copies: Int)
+
+        var title: String {
+            switch self {
+            case .notDuplicated: return "No duplicates"
+            case .keptCopy: return "Kept copy"
+            case .redundantCopy: return "Duplicate"
+            }
+        }
+
+        var detail: String {
+            switch self {
+            case .notDuplicated:
+                return "No other file matches the current rule."
+            case .keptCopy(let copies):
+                return "\(copies) copies match. This one is kept; the others are offered for deletion."
+            case .redundantCopy(let copies):
+                return "\(copies) copies match. This one would be removed; an identical copy is kept."
+            }
+        }
+    }
+
+    /// The duplicate status of one file under the current rule.
+    func duplicateStatus(forItemID id: String) -> DuplicateStatus {
+        guard let group = duplicateGroups.first(where: { group in
+            group.members.contains { $0.file.id == id }
+        }) else {
+            return .notDuplicated
+        }
+        let copies = group.members.count
+        return group.keptFile?.id == id
+            ? .keptCopy(copies: copies)
+            : .redundantCopy(copies: copies)
+    }
+
     /// The ids of the copies each group keeps, so a renderer can mark them.
     var keptDuplicateIDs: Set<String> {
         Set(duplicateGroups.compactMap { $0.keptFile?.id })
