@@ -1005,7 +1005,12 @@ public final class ImageCaptureDeviceGateway: NSObject, @preconcurrency ICDevice
     }
 
     nonisolated private static func makeMetadataSummary(_ metadata: [AnyHashable: Any]) -> MediaMetadataSummary {
-        let values = Dictionary(uniqueKeysWithValues: metadata.map { (String(describing: $0.key), $0.value) })
+        // Framework metadata keys are stringified, and two distinct keys can stringify to
+        // the same text, which would trap while merely reading a file's properties.
+        let values = Dictionary(
+            metadata.map { (String(describing: $0.key), $0.value) },
+            uniquingKeysWith: { first, _ in first }
+        )
         let gps = values["{GPS}"] as? [String: Any] ?? values["GPS"] as? [String: Any] ?? [:]
         let exif = values["{Exif}"] as? [String: Any] ?? values["Exif"] as? [String: Any] ?? [:]
         let tiff = values["{TIFF}"] as? [String: Any] ?? values["TIFF"] as? [String: Any] ?? [:]

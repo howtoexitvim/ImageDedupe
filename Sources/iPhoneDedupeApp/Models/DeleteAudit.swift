@@ -103,7 +103,13 @@ enum DeleteReconciler {
             }
         }
         let presentFingerprints = Dictionary(grouping: catalog.files, by: { $0.token.fingerprint })
-        let failedReasons = Dictionary(uniqueKeysWithValues: summary.failed.map { ($0.token, $0.reason) })
+        // Two copies of one file share a token where the device assigns no object handles,
+        // so a batch failing both would trap here. The first reason is kept; a delete audit
+        // must never crash the app that is reporting it.
+        let failedReasons = Dictionary(
+            summary.failed.map { ($0.token, $0.reason) },
+            uniquingKeysWith: { first, _ in first }
+        )
         let canceled = Set(summary.canceled)
         let successful = Set(summary.successful)
 

@@ -424,6 +424,31 @@ final class DuplicateDeleteFlowTests: XCTestCase {
         XCTAssertNil(viewModel.pendingDeleteSnapshot)
     }
 
+    /// Downloading a whole duplicate group must not crash.
+    ///
+    /// Reported on 2026-08-16: batch download crashed in
+    /// `Dictionary(uniqueKeysWithValues:)` inside `importSelected`, keyed by token.
+    ///
+    /// This was a direct consequence of keeping every duplicate file: on a device that
+    /// assigns no object handles, two copies of one file share a token, so a duplicate group
+    /// legitimately contains repeated tokens. Any dictionary keyed by token now traps, and
+    /// the trap kills the app mid-download rather than failing one file.
+    func testDownloadingItemsThatShareATokenDoesNotTrap() {
+        let viewModel = makeViewModel()
+        let shared = DeviceFileToken.fixture(objectHandle: 0, name: "A.HEIC")
+        viewModel.allItems = [
+            MediaBrowserViewModel.MediaItem(model: file(id: "a1", name: "A.HEIC"), token: shared),
+            MediaBrowserViewModel.MediaItem(model: file(id: "a2", name: "A.HEIC"), token: shared)
+        ]
+        viewModel.recomputeDuplicatePlanForTesting()
+
+        // The mapping the crash site builds. It must tolerate a repeated key.
+        let itemByToken = viewModel.itemsByTokenForTesting()
+
+        XCTAssertEqual(itemByToken.count, 1, "One entry per token, not a trap.")
+        XCTAssertNotNil(itemByToken[shared])
+    }
+
     // MARK: - Results sheet must not interrupt a clean delete
 
     func testCleanDeleteDoesNotAutoPresentTheResultsSheet() async {

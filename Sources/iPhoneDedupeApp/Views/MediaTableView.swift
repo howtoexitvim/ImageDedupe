@@ -221,7 +221,7 @@ struct MediaTableView: NSViewRepresentable {
             } else {
                 self.rows = items.map { .item($0.id) }
             }
-            self.itemsByID = Dictionary(uniqueKeysWithValues: items.map { ($0.id, $0) })
+            self.itemsByID = Dictionary(items.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
             // Clicks, arrow keys, and scroll-to-row all work in table rows, which differ
             // from item indices once group headers are interleaved.
             controller.rowMapping = MediaTableController.RowMapping(

@@ -428,7 +428,9 @@ final class MediaBrowserViewModel: ObservableObject {
             )
             filteredModels = query.apply(to: searchedItems.map(\.model))
         }
-        let itemByID = Dictionary(uniqueKeysWithValues: searchedItems.map { ($0.id, $0) })
+        // Ids are unique by construction, but this is derived from device data and a trap
+        // here takes the whole app down, so it degrades instead.
+        let itemByID = Dictionary(searchedItems.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
 
         var items: [MediaItem] = []
         var indexByID: [String: Int] = [:]
@@ -754,7 +756,12 @@ final class MediaBrowserViewModel: ObservableObject {
                     }
                 )
             }
-            let itemByToken = Dictionary(uniqueKeysWithValues: items.map { ($0.token, $0) })
+            // Keyed by token, and tokens repeat: on a device that assigns no object
+            // handles, two copies of one file share a token, so a duplicate group carries
+            // repeated keys. `uniqueKeysWithValues` traps on that and killed the app
+            // mid-download on 2026-08-16. The first item wins; the copies are identical by
+            // definition of the fingerprint, so this is only used to recover a display name.
+            let itemByToken = Dictionary(items.map { ($0.token, $0) }, uniquingKeysWith: { first, _ in first })
             var committed: [DeviceDownloadSuccess] = []
             for download in summary.successful {
                 let targetName = itemByToken[download.token]?.model.name ?? download.filename
@@ -1021,6 +1028,12 @@ final class MediaBrowserViewModel: ObservableObject {
         sortField = field
         sortOrder = order
         refreshVisibleOrder()
+    }
+
+    /// The token→item mapping `importSelected` builds, exposed so its de-duplication is
+    /// testable without a device.
+    func itemsByTokenForTesting() -> [DeviceFileToken: MediaItem] {
+        Dictionary(allItems.map { ($0.token, $0) }, uniquingKeysWith: { first, _ in first })
     }
 
     func recomputeDuplicatePlanForTesting() {
@@ -1383,9 +1396,11 @@ final class MediaBrowserViewModel: ObservableObject {
         if let filename = summary.successful.last?.filename {
             lastImportedFileURL = destination.appendingPathComponent(filename)
         }
-        let requestedIDsByToken = Dictionary(uniqueKeysWithValues: requestedItems.map {
-            ($0.token, $0.id)
-        })
+        // Tokens repeat across copies of one file, so this must merge rather than trap.
+        let requestedIDsByToken = Dictionary(
+            requestedItems.map { ($0.token, $0.id) },
+            uniquingKeysWith: { first, _ in first }
+        )
         for successfulDownload in summary.successful {
             guard let itemID = requestedIDsByToken[successfulDownload.token] else {
                 continue

@@ -148,4 +148,41 @@ final class CatalogIdentityUniquenessTests: XCTestCase {
         let byID = Dictionary(uniqueKeysWithValues: index.files.map { ($0.model.id, $0) })
         XCTAssertEqual(byID.count, 4)
     }
+
+    /// No source file may build a trapping dictionary over device-derived keys.
+    ///
+    /// This class of crash has now killed the app twice: once keyed by `model.id` after the
+    /// identity change, and once keyed by token after duplicates stopped being dropped. Both
+    /// times the keys came from the device, where uniqueness cannot be assumed.
+    /// `uniqueKeysWithValues` traps rather than degrading, so a device quirk becomes a
+    /// crash. The merging initializer is required instead.
+    func testNoSourceFileUsesATrappingDictionaryInitializer() throws {
+        let sources = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()   // iPhoneDedupeAppTests
+            .deletingLastPathComponent()   // Tests
+            .deletingLastPathComponent()   // package root
+            .appendingPathComponent("Sources")
+
+        let enumerator = try XCTUnwrap(
+            FileManager.default.enumerator(at: sources, includingPropertiesForKeys: nil)
+        )
+
+        var offenders: [String] = []
+        for case let url as URL in enumerator where url.pathExtension == "swift" {
+            guard let text = try? String(contentsOf: url, encoding: .utf8) else { continue }
+            for (number, line) in text.components(separatedBy: .newlines).enumerated() {
+                let trimmed = line.trimmingCharacters(in: .whitespaces)
+                // Skip prose: several comments name the API while explaining these crashes.
+                guard !trimmed.hasPrefix("//"), !trimmed.hasPrefix("///") else { continue }
+                if line.contains("uniqueKeysWithValues") {
+                    offenders.append("\(url.lastPathComponent):\(number + 1)")
+                }
+            }
+        }
+
+        XCTAssertTrue(
+            offenders.isEmpty,
+            "Use Dictionary(_:uniquingKeysWith:) for device-derived keys. Found: \(offenders)"
+        )
+    }
 }
