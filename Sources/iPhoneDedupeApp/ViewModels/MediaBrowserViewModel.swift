@@ -565,6 +565,33 @@ final class MediaBrowserViewModel: ObservableObject {
         }
     }
 
+    /// Selects or clears every redundant copy in one duplicate group.
+    ///
+    /// Driven by the group's header row, so a group of several copies is one click rather
+    /// than one click per file — the tedium the grouped view exists to avoid.
+    ///
+    /// The kept copy is excluded, exactly as it is from Select All: "select this group"
+    /// must never come to mean "delete every copy of this file".
+    func toggleGroupSelection(groupID: String) {
+        guard let group = duplicateGroups.first(where: { $0.id == groupID }) else { return }
+        let redundantIDs = Set(group.redundantFiles.map(\.id))
+        guard !redundantIDs.isEmpty else { return }
+
+        if redundantIDs.isSubset(of: selection.actionSelectedIDs) {
+            selection.actionSelectedIDs.subtract(redundantIDs)
+        } else {
+            selection.actionSelectedIDs.formUnion(redundantIDs)
+        }
+    }
+
+    /// Whether every redundant copy of a group is currently selected, for the header's
+    /// checkbox state.
+    func isGroupFullySelected(groupID: String) -> Bool {
+        guard let group = duplicateGroups.first(where: { $0.id == groupID }) else { return false }
+        let redundantIDs = Set(group.redundantFiles.map(\.id))
+        return !redundantIDs.isEmpty && redundantIDs.isSubset(of: selection.actionSelectedIDs)
+    }
+
     func selectAllVisible() {
         refreshVisibleOrder()
         // Deliberately does not force focus ownership. Command-A while the search field is

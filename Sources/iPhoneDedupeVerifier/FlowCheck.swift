@@ -253,10 +253,39 @@ enum FlowCheck {
             return
         }
         let matches = catalog.files.filter { $0.model.name == targetName }
-        guard matches.count == 1, let target = matches.first else {
-            check("exactly one match for \(targetName)", false, "found \(matches.count)")
-            await session.retire()
-            return
+
+        // A duplicate group legitimately has several files of this name. Refusing outright
+        // would make the duplicate flow untestable, so instead the *redundant* copy is
+        // resolved through the same planner the app uses — never a copy the plan keeps.
+        // With no duplicate group, the old one-match rule still applies.
+        let target: DeviceCatalogFile
+        if matches.count == 1, let only = matches.first {
+            target = only
+            check("exactly one match for \(targetName)", true)
+        } else {
+            let groups = DuplicateGrouping.groups(
+                files: catalog.files.map(\.model),
+                definition: DuplicateRuleSelection.default.definition
+            )
+            let redundantIDs = Set(
+                groups.flatMap { $0.redundantFiles.map(\.id) }
+            )
+            let redundant = matches.filter { redundantIDs.contains($0.model.id) }
+            guard redundant.count == 1, let only = redundant.first else {
+                check(
+                    "one redundant copy of \(targetName)",
+                    false,
+                    "\(matches.count) named matches, \(redundant.count) redundant"
+                )
+                await session.retire()
+                return
+            }
+            target = only
+            check(
+                "one redundant copy of \(targetName)",
+                true,
+                "\(matches.count) copies, keeping \(matches.count - 1)"
+            )
         }
 
         // Back up first, and confirm the bytes, before anything destructive.
@@ -300,8 +329,15 @@ enum FlowCheck {
             check("verification scan", false)
             return
         }
+        // For a duplicate group the kept copy must survive, so "gone" means one fewer copy
+        // rather than none — deleting every copy would be the failure, not the goal.
         let remaining = after.files.filter { $0.model.name == targetName }
-        check("file is gone from a fresh catalog", remaining.isEmpty, "remaining=\(remaining.count)")
+        let expectedRemaining = matches.count - 1
+        check(
+            "exactly the redundant copy was removed",
+            remaining.count == expectedRemaining,
+            "remaining=\(remaining.count) expected=\(expectedRemaining)"
+        )
         check("catalog shrank by one", after.files.count == catalog.files.count - 1,
               "\(catalog.files.count) → \(after.files.count)")
         check("backup survives the delete", FileManager.default.fileExists(atPath: backup.path))

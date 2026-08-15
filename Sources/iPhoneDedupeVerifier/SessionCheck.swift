@@ -21,6 +21,22 @@ enum SessionCheck {
             let collisions = seen.filter { $0.value > 1 }
             print("duplicateModelIDs=\(collisions.count)")
 
+            // Do a group's copies ever differ in size? If not, "keep the largest" is a
+            // coin flip dressed up as a policy.
+            let groups = DuplicateGrouping.groups(
+                files: first.files.map(\.model),
+                definition: DuplicateRuleSelection.default.definition
+            )
+            var differingSizes = 0
+            for group in groups where Set(group.members.map(\.file.size)).count > 1 {
+                differingSizes += 1
+            }
+            print("duplicateGroups=\(groups.count) groupsWithDifferingSizes=\(differingSizes)")
+            for group in groups.prefix(5) {
+                let sizes = group.members.map { String($0.file.size) }.joined(separator: ",")
+                print("  group=\(group.title) sizes=[\(sizes)]")
+            }
+
             // What each candidate rule would mark for deletion on the real catalog.
             let models = first.files.map(\.model)
             let candidates: [(String, [MediaField])] = [

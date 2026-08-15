@@ -194,6 +194,82 @@ final class DuplicateDeleteFlowTests: XCTestCase {
         XCTAssertEqual(viewModel.visibleItems.map(\.id), ["new", "old"])
     }
 
+    /// Selecting a whole group from its header. With several copies in a group, ticking
+    /// each one individually is the tedium the grouped view was meant to avoid.
+    func testSelectingAGroupSelectsItsRedundantCopiesOnly() {
+        let viewModel = makeViewModel()
+        viewModel.allItems = [
+            item(id: "a1", name: "A.HEIC"),
+            item(id: "a2", name: "A.HEIC"),
+            item(id: "a3", name: "A.HEIC"),
+            item(id: "b1", name: "B.HEIC"),
+            item(id: "b2", name: "B.HEIC")
+        ]
+        viewModel.recomputeDuplicatePlanForTesting()
+        viewModel.selectReviewScope(.duplicates)
+
+        let groupID = viewModel.duplicateGroups[0].id
+        viewModel.toggleGroupSelection(groupID: groupID)
+
+        // The kept copy is excluded, exactly as it is from Select All: deleting a whole
+        // group must never mean deleting every copy of the file.
+        XCTAssertEqual(viewModel.selectedActionIDs, ["a2", "a3"])
+    }
+
+    /// The header control toggles: a second press clears the group again.
+    func testSelectingAGroupTwiceClearsIt() {
+        let viewModel = makeViewModel()
+        viewModel.allItems = [
+            item(id: "a1", name: "A.HEIC"),
+            item(id: "a2", name: "A.HEIC")
+        ]
+        viewModel.recomputeDuplicatePlanForTesting()
+        viewModel.selectReviewScope(.duplicates)
+
+        let groupID = viewModel.duplicateGroups[0].id
+        viewModel.toggleGroupSelection(groupID: groupID)
+        XCTAssertEqual(viewModel.selectedActionIDs, ["a2"])
+
+        viewModel.toggleGroupSelection(groupID: groupID)
+        XCTAssertTrue(viewModel.selectedActionIDs.isEmpty)
+    }
+
+    /// Selecting one group leaves the others alone.
+    func testSelectingAGroupDoesNotDisturbOtherGroups() {
+        let viewModel = makeViewModel()
+        viewModel.allItems = [
+            item(id: "a1", name: "A.HEIC"),
+            item(id: "a2", name: "A.HEIC"),
+            item(id: "b1", name: "B.HEIC"),
+            item(id: "b2", name: "B.HEIC")
+        ]
+        viewModel.recomputeDuplicatePlanForTesting()
+        viewModel.selectReviewScope(.duplicates)
+
+        viewModel.toggleGroupSelection(groupID: viewModel.duplicateGroups[0].id)
+        viewModel.toggleGroupSelection(groupID: viewModel.duplicateGroups[1].id)
+
+        XCTAssertEqual(viewModel.selectedActionIDs, ["a2", "b2"])
+    }
+
+    /// With three copies, exactly one is kept and the other two are marked — the badges are
+    /// not "one tagged file per group". Checked because the tagging looked one-sided.
+    func testEveryRedundantCopyIsTaggedNotJustOne() {
+        let viewModel = makeViewModel()
+        viewModel.allItems = [
+            item(id: "a1", name: "A.HEIC"),
+            item(id: "a2", name: "A.HEIC"),
+            item(id: "a3", name: "A.HEIC")
+        ]
+        viewModel.recomputeDuplicatePlanForTesting()
+        viewModel.selectReviewScope(.duplicates)
+
+        // One blue seal.
+        XCTAssertEqual(viewModel.keptDuplicateIDs, ["a1"])
+        // Two orange triangles — every copy that Delete would remove.
+        XCTAssertEqual(viewModel.duplicateDeleteIDs, ["a2", "a3"])
+    }
+
     // MARK: - Results sheet must not interrupt a clean delete
 
     func testCleanDeleteDoesNotAutoPresentTheResultsSheet() async {

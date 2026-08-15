@@ -53,8 +53,12 @@ final class DuplicateListRowsTests: XCTestCase {
             file(id: "a3", name: "A.HEIC")
         ]))
 
-        guard case let .header(title) = rows[0] else { return XCTFail("Expected a header") }
+        guard case let .header(title, groupID) = rows[0] else {
+            return XCTFail("Expected a header")
+        }
         XCTAssertEqual(title, "A.HEIC — 3 copies")
+        // The header carries its group id so its select-all control knows what to act on.
+        XCTAssertFalse(groupID.isEmpty)
     }
 
     /// Header rows are not selectable, so Select All and arrow keys must be able to skip
@@ -122,5 +126,42 @@ final class DuplicateListRowsTests: XCTestCase {
         ]))
 
         XCTAssertNil(rows[0].itemID)
+    }
+
+    /// Scrolling to the first item of a group should bring that group's header with it.
+    ///
+    /// The header is the same height as the keyboard reveal padding, so relying on the
+    /// padding to happen to expose it landed the scroll exactly on the header's edge and
+    /// fought the next adjustment — the twitchy scrolling reported on 2026-08-16. Asking
+    /// for the header row explicitly is stable, and it also reads better: arrowing into a
+    /// new group shows which group you have entered.
+    func testScrollTargetForAGroupsFirstItemIsItsHeader() {
+        let rows = MediaListRow.rows(forGroups: groups([
+            file(id: "a1", name: "A.HEIC"),
+            file(id: "a2", name: "A.HEIC"),
+            file(id: "b1", name: "B.HEIC"),
+            file(id: "b2", name: "B.HEIC")
+        ]))
+
+        // rows: 0 header, 1 a1, 2 a2, 3 header, 4 b1, 5 b2
+        XCTAssertEqual(MediaListRow.scrollTargetRow(forItemID: "a1", in: rows), 0)
+        XCTAssertEqual(MediaListRow.scrollTargetRow(forItemID: "b1", in: rows), 3)
+    }
+
+    /// A later member scrolls to itself; dragging its header along would jump the view
+    /// backwards for no reason.
+    func testScrollTargetForALaterMemberIsTheItemItself() {
+        let rows = MediaListRow.rows(forGroups: groups([
+            file(id: "a1", name: "A.HEIC"),
+            file(id: "a2", name: "A.HEIC")
+        ]))
+
+        XCTAssertEqual(MediaListRow.scrollTargetRow(forItemID: "a2", in: rows), 2)
+    }
+
+    /// Without headers — All Media — the target is simply the item's own row.
+    func testScrollTargetWithoutHeadersIsTheItemRow() {
+        let rows: [MediaListRow] = [.item("x"), .item("y")]
+        XCTAssertEqual(MediaListRow.scrollTargetRow(forItemID: "y", in: rows), 1)
     }
 }

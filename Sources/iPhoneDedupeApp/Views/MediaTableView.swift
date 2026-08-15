@@ -316,7 +316,8 @@ struct MediaTableView: NSViewRepresentable {
             guard let tableView,
                   let clipView = scrollView?.contentView,
                   let focusedID = viewModel.selectedItemID,
-                  let row = controller.row(for: focusedID),
+                  let row = MediaListRow.scrollTargetRow(forItemID: focusedID, in: rows)
+                    ?? controller.row(for: focusedID),
                   row >= 0, row < tableView.numberOfRows else { return }
 
             let rowRect = tableView.rect(ofRow: row)
@@ -392,8 +393,8 @@ struct MediaTableView: NSViewRepresentable {
 
         func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int) -> NSView? {
             // A group row spans the table rather than filling columns.
-            if rows.indices.contains(row), case let .header(title) = rows[row] {
-                return groupHeaderCell(title: title, tableView: tableView)
+            if rows.indices.contains(row), case let .header(title, groupID) = rows[row] {
+                return groupHeaderCell(title: title, groupID: groupID, tableView: tableView)
             }
             guard let tableColumn,
                   let column = MediaTableColumn.column(for: tableColumn.identifier),
@@ -489,19 +490,22 @@ struct MediaTableView: NSViewRepresentable {
 
         /// The header above each duplicate group, naming the file and how many copies of it
         /// the current rule found.
-        private func groupHeaderCell(title: String, tableView: NSTableView) -> NSView {
+        private func groupHeaderCell(
+            title: String,
+            groupID: String,
+            tableView: NSTableView
+        ) -> NSView {
             let identifier = NSUserInterfaceItemIdentifier("MediaGroupHeaderCell")
-            let cell = tableView.makeView(withIdentifier: identifier, owner: self) as? NSTextField
-                ?? {
-                    let field = NSTextField(labelWithString: "")
-                    field.identifier = identifier
-                    field.font = .systemFont(ofSize: NSFont.smallSystemFontSize, weight: .semibold)
-                    field.textColor = .secondaryLabelColor
-                    field.lineBreakMode = .byTruncatingTail
-                    return field
-                }()
-            cell.stringValue = title
-            cell.toolTip = title
+            let cell = tableView.makeView(withIdentifier: identifier, owner: self) as? MediaGroupHeaderCellView
+                ?? MediaGroupHeaderCellView(identifier: identifier)
+            cell.configure(
+                title: title,
+                isChecked: viewModel.isGroupFullySelected(groupID: groupID),
+                onToggle: { [weak self] in
+                    self?.viewModel.toggleGroupSelection(groupID: groupID)
+                    self?.refreshFocusDecoration()
+                }
+            )
             return cell
         }
 
