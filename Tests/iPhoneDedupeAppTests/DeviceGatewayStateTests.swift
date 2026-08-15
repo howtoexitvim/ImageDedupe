@@ -5,6 +5,28 @@ import XCTest
 
 @MainActor
 final class DeviceGatewayStateTests: XCTestCase {
+    func testFrameworkCallbackBridgeHopsFromPrivateQueueToMainActor() async {
+        let delivered = expectation(description: "callback delivered")
+        var received: String?
+        let callback: @Sendable (String?, Error?) -> Void = DeviceFrameworkCallbackBridge.hop(
+            transform: { filename, error in
+                filename ?? error?.localizedDescription ?? "missing"
+            },
+            deliver: { value in
+                MainActor.preconditionIsolated()
+                received = value
+                delivered.fulfill()
+            }
+        )
+
+        DispatchQueue(label: "test.image-capture-private-queue").async {
+            callback("IMG_0001.HEIC", nil)
+        }
+
+        await fulfillment(of: [delivered], timeout: 1)
+        XCTAssertEqual(received, "IMG_0001.HEIC")
+    }
+
     func testCatalogIndexDropsRepeatedFrameworkTokenWithoutTrapping() {
         let generation = UUID()
         let token = DeviceFileToken(

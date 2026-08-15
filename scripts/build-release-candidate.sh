@@ -14,10 +14,12 @@ if [[ -z "$signing_identity" ]]; then
     signing_identity="-"
 fi
 
-swift build --package-path "$repo_root" -c release
 bin_path="$(swift build --package-path "$repo_root" -c release --show-bin-path)"
 app_path="$bin_path/iPhone Dedupe.app"
 contents_path="$app_path/Contents"
+"$repo_root/scripts/refuse-running-bundle.sh" "$contents_path/MacOS/iPhoneDedupeApp"
+
+swift build --package-path "$repo_root" -c release
 
 mkdir -p "$contents_path/MacOS" "$contents_path/Resources"
 cp "$bin_path/iPhoneDedupeApp" "$contents_path/MacOS/iPhoneDedupeApp"

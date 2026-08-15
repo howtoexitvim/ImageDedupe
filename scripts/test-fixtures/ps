@@ -1,0 +1,4 @@
+#!/bin/zsh
+
+set -euo pipefail
+print -r -- "${IPHONE_DEDUPE_TEST_PROCESS:?missing mock process command}"

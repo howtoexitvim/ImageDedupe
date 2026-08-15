@@ -48,7 +48,9 @@ swift test
 swift test -c release
 ```
 
-The latest verified baseline is 432 XCTest tests plus 22 Swift Testing tests in both Debug and Release configurations.
+The latest verified baseline is 433 XCTest tests plus 22 Swift Testing tests in both Debug and Release configurations.
+
+The bundle scripts refuse to replace or re-sign their target while that exact app is running. Quit the app before rebuilding; this prevents macOS from terminating a live process with `Code Signature Invalid`.
 
 ## Local Release Candidate
 

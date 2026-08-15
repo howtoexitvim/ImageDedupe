@@ -141,19 +141,24 @@ public final class ImageCaptureDeviceGateway: NSObject, @preconcurrency ICDevice
                 onTimeout: { await self.scheduler.invalidate() },
                 onCancel: { await self.scheduler.invalidate() }
             ) { requestToken in
-                file.requestThumbnailData(options: options) { data, error in
-                    let failure = error?.localizedDescription
-                    Task { @MainActor in
-                        if let data, !data.isEmpty {
-                            callback.complete(token: requestToken, result: .success(data))
-                        } else {
-                            callback.complete(
-                                token: requestToken,
-                                result: .failure(.failed(failure ?? "The device returned no thumbnail data."))
-                            )
+                file.requestThumbnailData(
+                    options: options,
+                    completion: DeviceFrameworkCallbackBridge.hop(
+                        transform: { data, error in
+                            (data, error?.localizedDescription)
+                        },
+                        deliver: { data, failure in
+                            if let data, !data.isEmpty {
+                                callback.complete(token: requestToken, result: .success(data))
+                            } else {
+                                callback.complete(
+                                    token: requestToken,
+                                    result: .failure(.failed(failure ?? "The device returned no thumbnail data."))
+                                )
+                            }
                         }
-                    }
-                }
+                    )
+                )
             }
         } catch {
             throw mapCallbackError(error, operation: "thumbnail")
@@ -175,17 +180,21 @@ public final class ImageCaptureDeviceGateway: NSObject, @preconcurrency ICDevice
                 onTimeout: { await self.scheduler.invalidate() },
                 onCancel: { await self.scheduler.invalidate() }
             ) { requestToken in
-                file.requestMetadataDictionary(options: nil) { metadata, error in
-                    let summary = metadata.map(Self.makeMetadataSummary)
-                    let failure = error?.localizedDescription
-                    Task { @MainActor in
-                        if let failure {
-                            callback.complete(token: requestToken, result: .failure(.failed(failure)))
-                        } else {
-                            callback.complete(token: requestToken, result: .success(summary))
+                file.requestMetadataDictionary(
+                    options: nil,
+                    completion: DeviceFrameworkCallbackBridge.hop(
+                        transform: { metadata, error in
+                            (metadata.map(Self.makeMetadataSummary), error?.localizedDescription)
+                        },
+                        deliver: { summary, failure in
+                            if let failure {
+                                callback.complete(token: requestToken, result: .failure(.failed(failure)))
+                            } else {
+                                callback.complete(token: requestToken, result: .success(summary))
+                            }
                         }
-                    }
-                }
+                    )
+                )
             }
         } catch {
             throw mapCallbackError(error, operation: "metadata")
@@ -479,24 +488,28 @@ public final class ImageCaptureDeviceGateway: NSObject, @preconcurrency ICDevice
                     self.cancelActiveProgress()
                 }
             ) { requestToken in
-                let progress = file.requestDownload(options: options) { filename, error in
-                    let safeFilename = filename
-                    let failure = error?.localizedDescription
-                    Task { @MainActor in
-                        if cancellation?.isCancellationRequested == true {
-                            callback.complete(token: requestToken, result: .failure(.canceled))
-                        } else if let failure {
-                            callback.complete(token: requestToken, result: .failure(.failed(failure)))
-                        } else if let safeFilename {
-                            callback.complete(token: requestToken, result: .success(safeFilename))
-                        } else {
-                            callback.complete(
-                                token: requestToken,
-                                result: .failure(.failed("The device returned no download filename."))
-                            )
+                let progress = file.requestDownload(
+                    options: options,
+                    completion: DeviceFrameworkCallbackBridge.hop(
+                        transform: { filename, error in
+                            (filename, error?.localizedDescription)
+                        },
+                        deliver: { safeFilename, failure in
+                            if cancellation?.isCancellationRequested == true {
+                                callback.complete(token: requestToken, result: .failure(.canceled))
+                            } else if let failure {
+                                callback.complete(token: requestToken, result: .failure(.failed(failure)))
+                            } else if let safeFilename {
+                                callback.complete(token: requestToken, result: .success(safeFilename))
+                            } else {
+                                callback.complete(
+                                    token: requestToken,
+                                    result: .failure(.failed("The device returned no download filename."))
+                                )
+                            }
                         }
-                    }
-                }
+                    )
+                )
                 self.activeFrameworkProgress = progress
                 cancellation?.bind(progress) {
                     Task { @MainActor in
@@ -553,24 +566,27 @@ public final class ImageCaptureDeviceGateway: NSObject, @preconcurrency ICDevice
                     device.cancelDelete()
                 }
             ) { requestToken in
-                let progress = device.requestDeleteFiles([file], deleteFailed: { _ in
-                    // The completion result below is the single source of truth.
-                }, completion: { result, error in
-                    let successful = (result[.successful] ?? []).isEmpty == false
-                    let failure = error?.localizedDescription
-                    Task { @MainActor in
-                        if cancellation?.isCancellationRequested == true {
-                            callback.complete(token: requestToken, result: .failure(.canceled))
-                        } else if successful {
-                            callback.complete(token: requestToken, result: .success(true))
-                        } else {
-                            callback.complete(
-                                token: requestToken,
-                                result: .failure(.failed(failure ?? "The device did not confirm deletion."))
-                            )
+                let progress = device.requestDeleteFiles(
+                    [file],
+                    deleteFailed: DeviceFrameworkCallbackBridge.ignore(),
+                    completion: DeviceFrameworkCallbackBridge.hop(
+                        transform: { result, error in
+                            ((result[.successful] ?? []).isEmpty == false, error?.localizedDescription)
+                        },
+                        deliver: { successful, failure in
+                            if cancellation?.isCancellationRequested == true {
+                                callback.complete(token: requestToken, result: .failure(.canceled))
+                            } else if successful {
+                                callback.complete(token: requestToken, result: .success(true))
+                            } else {
+                                callback.complete(
+                                    token: requestToken,
+                                    result: .failure(.failed(failure ?? "The device did not confirm deletion."))
+                                )
+                            }
                         }
-                    }
-                })
+                    )
+                )
                 self.activeFrameworkProgress = progress
                 cancellation?.bind(progress) {
                     progress?.cancel()
