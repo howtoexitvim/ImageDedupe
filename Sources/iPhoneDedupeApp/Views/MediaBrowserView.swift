@@ -35,31 +35,31 @@ struct MediaBrowserView: View {
                     max: MediaPane.sidebar.maximumWidth
                 )
         } detail: {
-            HStack(spacing: 0) {
-                VStack(spacing: 0) {
-                    mediaContent
-                    Divider()
-                    statusBar
-                }
-                .frame(minWidth: MediaPaneLayout.minimumCenterWidth, maxWidth: .infinity, maxHeight: .infinity)
-
-                if viewModel.isInspectorVisible {
-                    Divider()
+            // A real `NSSplitView` rather than an `HStack`.
+            //
+            // An HStack has no draggable divider — the `Divider()` there was decorative —
+            // and when both children declared a minimum width SwiftUI had to violate one,
+            // which clipped the browser's leading columns. Dropping the inspector's
+            // minimum instead let the center's `maxWidth: .infinity` squeeze the inspector
+            // to nothing. AppKit's split view arbitrates both concerns natively: it honours
+            // each pane's minimum and gives the divider real drag behaviour.
+            MediaDetailSplitView(
+                isInspectorVisible: viewModel.isInspectorVisible,
+                inspectorWidth: paneWidth(.inspector),
+                onInspectorWidthChange: { width in
+                    panePreferences.setWidth(width, for: .inspector)
+                },
+                content: {
+                    VStack(spacing: 0) {
+                        mediaContent
+                        Divider()
+                        statusBar
+                    }
+                },
+                inspector: {
                     InspectorView(viewModel: viewModel)
-                        .frame(
-                            idealWidth: paneWidth(.inspector),
-                            maxWidth: MediaPane.inspector.maximumWidth,
-                            maxHeight: .infinity
-                        )
-                        // Deliberately no hard `minWidth`. Both panes declaring a minimum
-                        // in a too-narrow HStack forces SwiftUI to violate one of them,
-                        // and it chose to clip the center browser's leading edge — the
-                        // checkbox, thumbnail, and name column vanished with nothing to
-                        // scroll to. The layout priority makes the inspector the pane that
-                        // yields, so the browser always keeps its declared minimum.
-                        .layoutPriority(-1)
                 }
-            }
+            )
         }
         .navigationSplitViewStyle(.balanced)
         .toolbar { toolbarContent }
