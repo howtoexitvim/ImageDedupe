@@ -241,6 +241,7 @@ private func importExactName(_ args: Arguments) throws {
         throw CommandError.missingValue("--destination")
     }
     try FileManager.default.createDirectory(at: destination, withIntermediateDirectories: true)
+    let destinationIdentity = try ImportDestinationIdentity.capture(destination: destination)
 
     let result = try scanWithRetry(timeout: args.timeout)
     let matches = result.files.filter { $0.model.name == targetName }
@@ -252,7 +253,11 @@ private func importExactName(_ args: Arguments) throws {
         throw CommandError.unsafeMatchCount(matches.count)
     }
 
-    let summary = DeviceImportController(timeoutSeconds: args.timeout).importFiles(matches.map(\.cameraFile), to: destination)
+    let summary = DeviceImportController(timeoutSeconds: args.timeout).importFiles(
+        matches.map(\.cameraFile),
+        to: destination,
+        destinationIdentity: destinationIdentity
+    )
     print("importSuccessful=\(summary.successful.count)")
     print("importFailed=\(summary.failed.count)")
     for imported in summary.successful {

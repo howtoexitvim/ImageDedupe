@@ -11,6 +11,7 @@ public final class DeviceImportController {
     public func importFiles(
         _ files: [ICCameraFile],
         to destination: URL,
+        destinationIdentity: ImportDestinationIdentity,
         cancellation: DeviceOperationCancellation? = nil,
         onProgress: (@Sendable (DeviceBatchProgress) -> Void)? = nil
     ) -> DeviceImportSummary {
@@ -30,6 +31,13 @@ public final class DeviceImportController {
         for (index, file) in files.enumerated() {
             if cancellation?.isCancellationRequested == true {
                 summary.canceled.append(contentsOf: files[index...])
+                break
+            }
+
+            do {
+                try destinationIdentity.validate(destination: destination)
+            } catch {
+                summary.failed.append(contentsOf: files[index...].map { (file: $0, error: error) })
                 break
             }
 
@@ -78,7 +86,17 @@ public final class DeviceImportController {
             if let error = result.error {
                 summary.failed.append((file: file, error: error))
             } else if let filename = result.filename {
-                summary.successful.append((file: file, filename: filename))
+                do {
+                    try destinationIdentity.validate(destination: destination)
+                    let outputURL = try ImportedFilePathPolicy.validateCompletedDownload(
+                        callbackFilename: filename,
+                        destination: destination
+                    )
+                    try destinationIdentity.validate(destination: destination)
+                    summary.successful.append((file: file, filename: outputURL.lastPathComponent))
+                } catch {
+                    summary.failed.append((file: file, error: error))
+                }
             } else {
                 summary.failed.append((file: file, error: DeviceMediaError.timeout("Timed out importing \(filename).")))
             }

@@ -30,6 +30,7 @@ struct OperationResultStore {
         }
 
         do {
+            try hardenExistingStoragePermissions()
             let data = try Data(contentsOf: fileURL)
             let decoder = JSONDecoder()
             decoder.dateDecodingStrategy = .iso8601
@@ -58,13 +59,36 @@ struct OperationResultStore {
     }
 
     private func save(_ records: [OperationResultRecord]) throws {
+        let directoryURL = fileURL.deletingLastPathComponent()
         try FileManager.default.createDirectory(
-            at: fileURL.deletingLastPathComponent(),
+            at: directoryURL,
             withIntermediateDirectories: true
         )
+        try setPrivateDirectoryPermissions(at: directoryURL)
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         try encoder.encode(records).write(to: fileURL, options: .atomic)
+        try setPrivateFilePermissions(at: fileURL)
+    }
+
+    private func hardenExistingStoragePermissions() throws {
+        let directoryURL = fileURL.deletingLastPathComponent()
+        try setPrivateDirectoryPermissions(at: directoryURL)
+        try setPrivateFilePermissions(at: fileURL)
+    }
+
+    private func setPrivateDirectoryPermissions(at url: URL) throws {
+        try FileManager.default.setAttributes(
+            [.posixPermissions: 0o700],
+            ofItemAtPath: url.path
+        )
+    }
+
+    private func setPrivateFilePermissions(at url: URL) throws {
+        try FileManager.default.setAttributes(
+            [.posixPermissions: 0o600],
+            ofItemAtPath: url.path
+        )
     }
 }

@@ -217,6 +217,16 @@ final class MediaGridInteractionTests: XCTestCase {
         XCTAssertTrue(viewModel.selectedActionIDs.isEmpty)
     }
 
+    func testContextMenuUsesDownloadForTheTransferAction() {
+        let viewModel = viewModel(["a"])
+        let coordinator = MediaCollectionView.Coordinator(viewModel: viewModel)
+        coordinator.apply(items: viewModel.filteredItems)
+
+        let titles = coordinator.contextMenu(forIndex: 0)?.items.map(\.title)
+
+        XCTAssertEqual(titles, ["Select", "", "Download “a.heic”", "Delete “a.heic”"])
+    }
+
     // MARK: - Shift extension (the chosen multi-select gesture)
 
     func testShiftDownExtendsAcrossAWholeRow() {

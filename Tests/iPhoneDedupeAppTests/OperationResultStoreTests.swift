@@ -81,6 +81,38 @@ final class OperationResultStoreTests: XCTestCase {
         XCTAssertFalse(FileManager.default.fileExists(atPath: fileURL.path))
     }
 
+    func testSavedIssueHistoryIsPrivateToTheCurrentUser() throws {
+        let store = OperationResultStore(fileURL: fileURL)
+
+        _ = try store.append(makeRecord(failedName: "IMG_0002.HEIC"))
+
+        let directoryAttributes = try FileManager.default.attributesOfItem(atPath: directoryURL.path)
+        let fileAttributes = try FileManager.default.attributesOfItem(atPath: fileURL.path)
+        XCTAssertEqual((directoryAttributes[.posixPermissions] as? NSNumber)?.intValue, 0o700)
+        XCTAssertEqual((fileAttributes[.posixPermissions] as? NSNumber)?.intValue, 0o600)
+    }
+
+    func testLoadingLegacyHistoryMigratesItsPermissionsBeforeReading() throws {
+        let store = OperationResultStore(fileURL: fileURL)
+        _ = try store.append(makeRecord(failedName: "IMG_0002.HEIC"))
+        try FileManager.default.setAttributes(
+            [.posixPermissions: 0o755],
+            ofItemAtPath: directoryURL.path
+        )
+        try FileManager.default.setAttributes(
+            [.posixPermissions: 0o644],
+            ofItemAtPath: fileURL.path
+        )
+
+        let result = store.load()
+
+        let directoryAttributes = try FileManager.default.attributesOfItem(atPath: directoryURL.path)
+        let fileAttributes = try FileManager.default.attributesOfItem(atPath: fileURL.path)
+        XCTAssertNil(result.warning)
+        XCTAssertEqual((directoryAttributes[.posixPermissions] as? NSNumber)?.intValue, 0o700)
+        XCTAssertEqual((fileAttributes[.posixPermissions] as? NSNumber)?.intValue, 0o600)
+    }
+
     private func makeRecord(index: Int = 0, failedName: String) -> OperationResultRecord {
         OperationResultRecord(
             id: UUID(),

@@ -125,7 +125,7 @@ struct MediaBrowserView: View {
             }
         }
         .listStyle(.sidebar)
-        .onChange(of: sidebarSelection) { selection in
+        .onChange(of: sidebarSelection) { _, selection in
             switch selection {
             case .device, .allMedia:
                 viewModel.selectReviewScope(.allMedia)
@@ -231,10 +231,11 @@ struct MediaBrowserView: View {
             }
             .menuStyle(.borderlessButton)
 
-            Button("Import") {
+            Button("Download") {
                 viewModel.importSelected()
             }
             .disabled(viewModel.selectedActionIDs.isEmpty || viewModel.isDeviceBusy)
+            .accessibilityLabel("Download")
 
             Button {
                 viewModel.revealLastImportInFinder()

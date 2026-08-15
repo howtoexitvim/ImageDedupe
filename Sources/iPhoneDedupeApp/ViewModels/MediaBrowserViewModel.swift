@@ -496,6 +496,13 @@ final class MediaBrowserViewModel: ObservableObject {
             status = "Import blocked: \(failure.message)"
             return
         }
+        let destinationIdentity: ImportDestinationIdentity
+        do {
+            destinationIdentity = try ImportDestinationIdentity.capture(destination: importDestination)
+        } catch {
+            status = "Import blocked: \(error.localizedDescription)"
+            return
+        }
         // Previously unguarded: a second Import, or an Import during a Delete, would both
         // reach the device concurrently.
         guard operationState.begin(.importing) else {
@@ -511,6 +518,7 @@ final class MediaBrowserViewModel: ObservableObject {
             let summary = DeviceImportController(timeoutSeconds: 120).importFiles(
                 items.map(\.cameraFile),
                 to: destination,
+                destinationIdentity: destinationIdentity,
                 cancellation: cancellation,
                 onProgress: { update in
                     Task { @MainActor [weak self] in
@@ -796,13 +804,11 @@ final class MediaBrowserViewModel: ObservableObject {
     }
 
     private func applyDeleteSummary(_ summary: DeviceDeleteSummary, requestedItems: [MediaItem]) {
-        let requestedIDs = Set(requestedItems.map(\.id))
         let successfulHandles = Set(summary.successful.map(\.ptpObjectHandle))
-        allItems.removeAll { item in
-            requestedIDs.contains(item.id) && successfulHandles.contains(item.cameraFile.ptpObjectHandle)
-        }
-        duplicatePlan = DuplicatePlanner.plan(files: allItems.map(\.model), rule: .nameKindSize)
-        refreshVisibleOrder()
+        let successfulIDs = Set(requestedItems.lazy
+            .filter { successfulHandles.contains($0.cameraFile.ptpObjectHandle) }
+            .map(\.id))
+        applySuccessfulDeletion(itemIDs: successfulIDs)
         status = "Deleted \(summary.successful.count) item(s), \(summary.failed.count) failed, \(summary.canceled.count) canceled."
         let failureReason = summary.error?.localizedDescription ?? "The device did not delete this item."
         persistOperationResult(OperationResultRecord(
@@ -823,6 +829,16 @@ final class MediaBrowserViewModel: ObservableObject {
         operationProgress = nil
         operationCancellation = nil
         operationState.finish()
+    }
+
+    /// Reconciles state derived from the current catalog after the device confirms which
+    /// requested items were actually deleted. Failed and canceled IDs are intentionally
+    /// absent, so their catalog rows and imported badges remain visible.
+    func applySuccessfulDeletion(itemIDs: Set<String>) {
+        allItems.removeAll { itemIDs.contains($0.id) }
+        importedItemIDs.subtract(itemIDs)
+        duplicatePlan = DuplicatePlanner.plan(files: allItems.map(\.model), rule: .nameKindSize)
+        refreshVisibleOrder()
     }
 
     private func applyDeleteFailure(_ message: String) {

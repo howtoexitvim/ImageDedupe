@@ -77,6 +77,16 @@ final class CatalogSnapshotTests: XCTestCase {
         XCTAssertEqual(viewModel.visibleItems.count, 4)
     }
 
+    func testSuccessfulDeletionClearsOnlySuccessfulImportedItems() {
+        let viewModel = viewModel(count: 3)
+        viewModel.importedItemIDs = ["id-0", "id-1", "id-2"]
+
+        viewModel.applySuccessfulDeletion(itemIDs: ["id-0", "id-2"])
+
+        XCTAssertEqual(viewModel.allItems.map(\.id), ["id-1"])
+        XCTAssertEqual(viewModel.importedItemIDs, ["id-1"])
+    }
+
     func testEmptyCatalogProducesAnEmptySnapshot() {
         let viewModel = viewModel(count: 0)
         XCTAssertTrue(viewModel.visibleItems.isEmpty)
