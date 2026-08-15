@@ -222,13 +222,40 @@ struct MediaSelectionState: Equatable {
         actionSelectedIDs = base.union(ids(from: origin, to: id))
     }
 
+    /// Starts a marquee drag from blank canvas, where there is no origin item.
+    ///
+    /// Additive drags (Command or Shift held) keep the existing selection as their base;
+    /// a plain drag replaces it, matching Finder.
+    mutating func beginMarqueeSelection(additive: Bool) {
+        focusOwner = .mediaBrowser
+        dragBaseSelection = additive ? actionSelectedIDs : []
+        dragOriginID = nil
+        isMarqueeSelecting = true
+        if !additive {
+            actionSelectedIDs.removeAll()
+        }
+        endExtension()
+    }
+
+    /// Replaces the marquee's contribution with the items it currently intersects, leaving
+    /// any pre-drag selection intact. Shrinking the marquee therefore deselects only what
+    /// the marquee itself added.
+    mutating func updateMarqueeSelection(intersecting ids: Set<String>) {
+        guard isMarqueeSelecting, let base = dragBaseSelection else { return }
+        let valid = ids.filter { contains($0) }
+        actionSelectedIDs = base.union(valid)
+    }
+
     mutating func endDragSelection() {
         dragBaseSelection = nil
         dragOriginID = nil
+        isMarqueeSelecting = false
     }
 
+    private var isMarqueeSelecting = false
+
     var isDragSelecting: Bool {
-        dragOriginID != nil
+        dragOriginID != nil || isMarqueeSelecting
     }
 
     // MARK: - Ranges

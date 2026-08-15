@@ -264,6 +264,16 @@ final class MediaBrowserViewModel: ObservableObject {
         selection.updateDragSelection(to: id)
     }
 
+    /// Starts a Grid marquee from blank canvas.
+    func beginMarqueeSelection(additive: Bool) {
+        refreshVisibleOrder()
+        selection.beginMarqueeSelection(additive: additive)
+    }
+
+    func updateMarqueeSelection(intersecting ids: Set<String>) {
+        selection.updateMarqueeSelection(intersecting: ids)
+    }
+
     func endDragSelection() {
         selection.endDragSelection()
     }

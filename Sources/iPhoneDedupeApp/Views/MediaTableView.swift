@@ -268,12 +268,28 @@ struct MediaTableView: NSViewRepresentable {
             viewModel.requestDeleteConfirmation()
         }
 
-        /// Scrolls the focused row into view after keyboard movement.
+        /// Scrolls the focused row into view after keyboard movement, keeping a row of
+        /// context around it.
+        ///
+        /// `scrollRowToVisible` alone scrolls the minimum distance, parking the focused row
+        /// flush against the edge with nothing visible beyond it, which reads as the list
+        /// not scrolling at all.
         func scrollFocusIntoView() {
             guard let tableView,
+                  let clipView = scrollView?.contentView,
                   let focusedID = viewModel.selectedItemID,
-                  let row = controller.row(for: focusedID) else { return }
-            tableView.scrollRowToVisible(row)
+                  let row = controller.row(for: focusedID),
+                  row >= 0, row < tableView.numberOfRows else { return }
+
+            let rowRect = tableView.rect(ofRow: row)
+            guard let origin = MediaScrollGeometry.originToRevealItem(
+                rowRect,
+                in: clipView.documentVisibleRect
+            ) else { return }
+
+            let maxOrigin = max(0, tableView.bounds.height - clipView.bounds.height)
+            clipView.scroll(to: NSPoint(x: clipView.bounds.origin.x, y: min(origin, maxOrigin)))
+            scrollView?.reflectScrolledClipView(clipView)
         }
 
         /// Repaints focus and action-selection decoration on the rows that are on screen.
