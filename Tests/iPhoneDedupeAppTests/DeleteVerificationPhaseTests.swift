@@ -155,6 +155,42 @@ final class DeleteVerificationPhaseTests: XCTestCase {
         XCTAssertNotEqual(audit?.items.first?.outcome, .confirmedRemoved)
     }
 
+    func testDeleteRejectedBeforeSubmissionSkipsTheVerificationScan() async {
+        // A scheduler rejection happens before any framework command is issued, so there is
+        // nothing on the device to verify. Running a full rescan here is what made a failed
+        // Delete sit at `Verifying deletion…` for a long time and then report pending.
+        for reason in [
+            DeviceCommandScheduler.AcquireError.invalidated.localizedDescription,
+            DeviceCommandScheduler.AcquireError.cancelling.localizedDescription,
+            DeviceCommandScheduler.AcquireError.generationCanceled.localizedDescription
+        ] {
+            var verificationScanCount = 0
+            let viewModel = makeViewModel(verificationScan: { _ in
+                verificationScanCount += 1
+                throw DeviceGatewayError.noDevice
+            })
+            let snapshot = snapshot(named: "IMG_9006.HEIC")
+
+            viewModel.startDeleteVerificationForTesting(
+                snapshot: snapshot,
+                summary: DeviceGatewayDeleteSummary(failed: [
+                    DeviceOperationFailure(
+                        token: snapshot.items[0].token,
+                        filename: snapshot.items[0].filename,
+                        reason: reason
+                    )
+                ])
+            )
+            await waitUntil { !viewModel.isDeviceBusy }
+
+            XCTAssertEqual(verificationScanCount, 0, "No scan should run for: \(reason)")
+            XCTAssertNotEqual(
+                viewModel.operationHistory.first?.deleteAudit?.items.first?.outcome,
+                .confirmedRemoved
+            )
+        }
+    }
+
     // MARK: - Retry Verification is scan-only
 
     func testRetryVerificationRunsAScanAndNeverResubmitsDelete() async {

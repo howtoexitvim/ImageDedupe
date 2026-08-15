@@ -113,8 +113,11 @@ public final class ImageCaptureDeviceGateway: NSObject, @preconcurrency ICDevice
                     self.abortScan(with: .timedOut)
                 },
                 onCancel: {
-                    await self.scheduler.invalidate()
+                    // A canceled scan reads nothing and mutates nothing, so the gateway
+                    // recovers and the user can simply scan again.
+                    await self.scheduler.suspendForCancellation()
                     self.abortScan(with: .canceled)
+                    await self.scheduler.resumeAfterAcknowledgedCancellation()
                 }
             ) { token in
                 self.scanCallbackToken = token
@@ -161,7 +164,11 @@ public final class ImageCaptureDeviceGateway: NSObject, @preconcurrency ICDevice
             return try await callback.wait(
                 timeout: timeout,
                 onTimeout: { await self.scheduler.invalidate() },
-                onCancel: { await self.scheduler.invalidate() }
+                // A canceled preview read is harmless; it must not latch the gateway.
+                onCancel: {
+                    await self.scheduler.suspendForCancellation()
+                    await self.scheduler.resumeAfterAcknowledgedCancellation()
+                }
             ) { requestToken in
                 file.requestThumbnailData(
                     options: options,
@@ -200,7 +207,11 @@ public final class ImageCaptureDeviceGateway: NSObject, @preconcurrency ICDevice
             return try await callback.wait(
                 timeout: timeout,
                 onTimeout: { await self.scheduler.invalidate() },
-                onCancel: { await self.scheduler.invalidate() }
+                // A canceled preview read is harmless; it must not latch the gateway.
+                onCancel: {
+                    await self.scheduler.suspendForCancellation()
+                    await self.scheduler.resumeAfterAcknowledgedCancellation()
+                }
             ) { requestToken in
                 file.requestMetadataDictionary(
                     options: nil,
@@ -549,8 +560,9 @@ public final class ImageCaptureDeviceGateway: NSObject, @preconcurrency ICDevice
                     self.cancelActiveProgress()
                 },
                 onCancel: {
-                    await self.scheduler.invalidate()
+                    await self.scheduler.suspendForCancellation()
                     self.cancelActiveProgress()
+                    await self.scheduler.resumeAfterAcknowledgedCancellation()
                 }
             ) { requestToken in
                 let progress = file.requestDownload(
@@ -578,8 +590,11 @@ public final class ImageCaptureDeviceGateway: NSObject, @preconcurrency ICDevice
                 self.activeFrameworkProgress = progress
                 cancellation?.bind(progress) {
                     Task { @MainActor in
-                        await self.scheduler.invalidate()
+                        // `Progress.cancel()` on a download is a clean, framework-supported
+                        // abort, so the gateway recovers instead of latching.
+                        await self.scheduler.suspendForCancellation()
                         callback.complete(token: requestToken, result: .failure(.canceled))
+                        await self.scheduler.resumeAfterAcknowledgedCancellation()
                     }
                 }
             }
@@ -621,14 +636,17 @@ public final class ImageCaptureDeviceGateway: NSObject, @preconcurrency ICDevice
             _ = try await callback.wait(
                 timeout: timeout,
                 onTimeout: {
+                    // Unacknowledged: the device may still be mid-delete, so the gateway
+                    // stays latched until the app is reopened.
                     await self.scheduler.invalidate()
                     self.cancelActiveProgress()
                     device.cancelDelete()
                 },
                 onCancel: {
-                    await self.scheduler.invalidate()
+                    await self.scheduler.suspendForCancellation()
                     self.cancelActiveProgress()
                     device.cancelDelete()
+                    await self.scheduler.resumeAfterAcknowledgedCancellation()
                 }
             ) { requestToken in
                 let progress = device.requestDeleteFiles(
@@ -657,8 +675,13 @@ public final class ImageCaptureDeviceGateway: NSObject, @preconcurrency ICDevice
                     progress?.cancel()
                     device.cancelDelete()
                     Task { @MainActor in
-                        await self.scheduler.invalidate()
+                        // A user cancel that ImageCaptureCore accepts is a clean abort, so
+                        // the gateway is held only while it settles and then released.
+                        // Latching here is what left the app unable to download, preview,
+                        // delete, or rescan until relaunch.
+                        await self.scheduler.suspendForCancellation()
                         callback.complete(token: requestToken, result: .failure(.canceled))
+                        await self.scheduler.resumeAfterAcknowledgedCancellation()
                     }
                 }
             }

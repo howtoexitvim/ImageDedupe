@@ -1161,6 +1161,18 @@ final class MediaBrowserViewModel: ObservableObject {
     /// that late arrival would persist a second audit record for work the user stopped.
     private var activeVerificationID: UUID?
 
+    /// Failure reasons that prove no framework command was ever issued.
+    ///
+    /// All of these are decided before submission: either no device was bound, or the
+    /// scheduler refused admission. Nothing reached the iPhone, so there is nothing a
+    /// catalog rescan could tell the user that is not already known.
+    private static let preSubmissionFailureReasons: Set<String> = [
+        DeviceGatewayError.noDevice.localizedDescription,
+        DeviceCommandScheduler.AcquireError.invalidated.localizedDescription,
+        DeviceCommandScheduler.AcquireError.cancelling.localizedDescription,
+        DeviceCommandScheduler.AcquireError.generationCanceled.localizedDescription
+    ]
+
     /// Whether the framework delete was provably never submitted.
     ///
     /// When nothing reached the device there is nothing to verify, so the operation
@@ -1173,8 +1185,7 @@ final class MediaBrowserViewModel: ObservableObject {
         guard summary.failed.count == snapshot.items.count, !summary.failed.isEmpty else {
             return false
         }
-        let neverSubmitted = DeviceGatewayError.noDevice.localizedDescription
-        return summary.failed.allSatisfy { $0.reason == neverSubmitted }
+        return summary.failed.allSatisfy { Self.preSubmissionFailureReasons.contains($0.reason) }
     }
 
     /// Starts post-delete verification. Test seam for the phase and its cancellation.
@@ -1202,14 +1213,15 @@ final class MediaBrowserViewModel: ObservableObject {
         // Nothing reached the device: finish now rather than making the user sit through a
         // misleading destructive-looking phase for an answer already known.
         if wasNeverSubmitted(snapshot: snapshot, summary: summary) {
+            let reason = summary.failed.first?.reason
+                ?? DeviceGatewayError.noDevice.localizedDescription
             finishVerification(
                 audit: DeleteReconciler.unverified(
                     snapshot: snapshot,
-                    reason: summary.failed.first?.reason
-                        ?? DeviceGatewayError.noDevice.localizedDescription,
+                    reason: reason,
                     frameworkSummary: summary
                 ),
-                status: "Delete was not submitted: \(DeviceGatewayError.noDevice.localizedDescription) Nothing was removed."
+                status: "Delete was not submitted: \(reason) Nothing was removed."
             )
             return
         }

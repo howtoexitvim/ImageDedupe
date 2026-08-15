@@ -9,6 +9,7 @@ public actor DeviceCommandScheduler {
     public enum AcquireError: Error, Equatable, LocalizedError, Sendable {
         case generationCanceled
         case invalidated
+        case cancelling
 
         public var errorDescription: String? {
             switch self {
@@ -16,6 +17,8 @@ public actor DeviceCommandScheduler {
                 "This request belongs to an older device scan."
             case .invalidated:
                 "The device gateway stopped after an unacknowledged operation. Reopen the app before retrying."
+            case .cancelling:
+                "The previous device operation is still being canceled. Try again in a moment."
             }
         }
     }
@@ -40,7 +43,17 @@ public actor DeviceCommandScheduler {
     private var highPriorityWaiters: [Waiter] = []
     private var lowPriorityWaiters: [Waiter] = []
     private var canceledGenerations: Set<UUID> = []
+
+    /// Permanent latch. Set only when a framework operation was never acknowledged, so the
+    /// device may still be mid-command and no further submission is safe.
     private var isInvalidated = false
+
+    /// Temporary hold while a cancellation settles.
+    ///
+    /// A user-initiated Cancel is not the same as an unacknowledged operation. Latching the
+    /// gateway for an acknowledged cancel is what made one Download Cancel or Delete Cancel
+    /// permanently break downloads, previews, delete, and rescan until relaunch.
+    private var isCancelling = false
 
     private(set) var activeLease: Lease?
 
@@ -53,6 +66,9 @@ public actor DeviceCommandScheduler {
     public func acquire(priority: Priority, generation: UUID?) async throws -> Lease {
         if isInvalidated {
             throw AcquireError.invalidated
+        }
+        if isCancelling {
+            throw AcquireError.cancelling
         }
         if let generation, canceledGenerations.contains(generation) {
             throw AcquireError.generationCanceled
@@ -98,8 +114,28 @@ public actor DeviceCommandScheduler {
         rejectAllWaiters(in: &lowPriorityWaiters)
     }
 
+    /// Holds new submissions while a user-initiated cancellation settles.
+    ///
+    /// Queued work is rejected so nothing is submitted on top of a command being torn down,
+    /// but unlike `invalidate()` this is reversible.
+    public func suspendForCancellation() {
+        guard !isCancelling else { return }
+        isCancelling = true
+        rejectAllWaiters(in: &highPriorityWaiters, with: .cancelling)
+        rejectAllWaiters(in: &lowPriorityWaiters, with: .cancelling)
+    }
+
+    /// Releases the hold once the framework acknowledged the cancellation.
+    ///
+    /// Deliberately cannot clear `isInvalidated`: if the operation went unacknowledged, the
+    /// device state is genuinely uncertain and the permanent latch must survive.
+    public func resumeAfterAcknowledgedCancellation() {
+        isCancelling = false
+        startNextCommand()
+    }
+
     private func startNextCommand() {
-        guard activeLease == nil else {
+        guard activeLease == nil, !isInvalidated, !isCancelling else {
             return
         }
 
@@ -140,9 +176,12 @@ public actor DeviceCommandScheduler {
         waiters = retained
     }
 
-    private func rejectAllWaiters(in waiters: inout [Waiter]) {
+    private func rejectAllWaiters(
+        in waiters: inout [Waiter],
+        with error: AcquireError = .invalidated
+    ) {
         for waiter in waiters {
-            waiter.continuation.resume(returning: .failure(.invalidated))
+            waiter.continuation.resume(returning: .failure(error))
         }
         waiters.removeAll()
     }
