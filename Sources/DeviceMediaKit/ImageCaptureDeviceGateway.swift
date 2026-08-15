@@ -835,9 +835,17 @@ public final class ImageCaptureDeviceGateway: NSObject, @preconcurrency ICDevice
             commandDevice = camera
             retainedDevice = camera
             camera.delegate = self
-            if camera.hasOpenSession, !isSessionCatalogStale {
+            if camera.hasOpenSession {
                 // The catalog is already enumerated on this open session, so the readiness
                 // callback will not fire again; publish what the device already has.
+                //
+                // This applies after a delete too. `requestOpenSession` on an already-open
+                // session is ignored by the framework, so `didOpenSession` never arrives and
+                // the scan waits out its entire timeout — that is what made a delete appear
+                // to hang for minutes and left Scan, previews, and later commands dead.
+                // `mediaFiles` reflects the deletion, so publishing directly is both correct
+                // and immediate.
+                isSessionCatalogStale = false
                 publishCatalog(from: camera)
             } else {
                 requestOpenSession(on: camera)

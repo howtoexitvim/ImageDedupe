@@ -89,6 +89,18 @@ final class StatusBarLayoutTests: XCTestCase {
         XCTAssertFalse(plan.showsProgressBar, "The decorative bar yields before the text.")
     }
 
+    func testActionTitlesCollapseToIconsOnlyAsTheLastResort() {
+        // A truncated button reading `D` is useless, so the words give way to icons — but
+        // only after every count and title has already been dropped.
+        let roomy = MediaStatusBarLayout.plan(availableWidth: 1280, hasProgress: false)
+        XCTAssertTrue(roomy.showsActionTitles)
+
+        let tight = MediaStatusBarLayout.plan(availableWidth: 320, hasProgress: true)
+        XCTAssertFalse(tight.showsActionTitles)
+        XCTAssertFalse(tight.showsDuplicateCount)
+        XCTAssertFalse(tight.showsSelectedCount)
+    }
+
     func testProgressReservesRoomSoCountsYieldEarlier() {
         // At a width that fits everything when idle, the progress bar and its text push the
         // lowest-priority count out.

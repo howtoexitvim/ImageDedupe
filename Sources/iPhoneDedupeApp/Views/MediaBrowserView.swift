@@ -233,9 +233,19 @@ struct MediaBrowserView: View {
                     hasProgress: viewModel.operationProgress != nil
                 )
             )
-            .frame(width: proxy.size.width, alignment: .leading)
+            // The height is clamped on the content, not just on the GeometryReader. The
+            // reader reports the width it is offered, which can briefly exceed what the
+            // content actually gets; clamping only the outer frame let a label wrap inside
+            // and push the bar to two lines anyway.
+            .frame(
+                width: proxy.size.width,
+                height: statusBarHeight,
+                alignment: .leading
+            )
+            .clipped()
         }
         .frame(height: statusBarHeight)
+        .fixedSize(horizontal: false, vertical: true)
     }
 
     /// One line of caption text plus the vertical padding, so the bar cannot change height.
@@ -273,11 +283,18 @@ struct MediaBrowserView: View {
             .help("Download destination: \(viewModel.importDestination.path)")
             .accessibilityLabel("Download destination: \(viewModel.importDestination.lastPathComponent)")
 
-            Button("Download") {
+            Button {
                 viewModel.importSelected()
+            } label: {
+                if plan.showsActionTitles {
+                    Text("Download").mediaStatusBarLabel()
+                } else {
+                    Image(systemName: "arrow.down.circle")
+                }
             }
-            .mediaStatusBarLabel()
+            .fixedSize()
             .disabled(viewModel.selectedActionIDs.isEmpty || viewModel.isDeviceBusy)
+            .help("Download the selected items")
             .accessibilityLabel("Download")
 
             Button {
@@ -289,11 +306,19 @@ struct MediaBrowserView: View {
             .help("Reveal last imported file in Finder")
             .accessibilityLabel("Reveal last imported file in Finder")
 
-            Button("Delete") {
+            Button {
                 viewModel.requestDeleteConfirmation()
+            } label: {
+                if plan.showsActionTitles {
+                    Text("Delete").mediaStatusBarLabel()
+                } else {
+                    Image(systemName: "trash")
+                }
             }
-            .mediaStatusBarLabel()
+            .fixedSize()
             .disabled(viewModel.selectedActionIDs.isEmpty || viewModel.isDeviceBusy)
+            .help("Delete the selected items from the iPhone")
+            .accessibilityLabel("Delete")
 
             Divider().frame(height: 16)
 
@@ -330,12 +355,23 @@ struct MediaBrowserView: View {
                     .mediaStatusBarText(
                         MediaStatusBarText(message: progress.detail, prefix: "Operation status")
                     )
-                Button(progress.isCanceling ? "Canceling…" : "Cancel") {
+                Button {
                     viewModel.cancelCurrentOperation()
+                } label: {
+                    if plan.showsActionTitles {
+                        Text(progress.isCanceling ? "Canceling…" : "Cancel")
+                            .mediaStatusBarLabel()
+                    } else {
+                        // Never truncate this one to `...`; it is the control the user needs
+                        // most while an operation is running.
+                        Image(systemName: "xmark.circle")
+                    }
                 }
-                .mediaStatusBarLabel()
+                .fixedSize()
                 .controlSize(.small)
                 .disabled(!progress.canCancel)
+                .help(progress.isCanceling ? "Canceling…" : "Cancel the current operation")
+                .accessibilityLabel(progress.isCanceling ? "Canceling" : "Cancel")
                 .accessibilityHint("Stops after the device acknowledges cancellation")
             } else {
                 Text(viewModel.status)

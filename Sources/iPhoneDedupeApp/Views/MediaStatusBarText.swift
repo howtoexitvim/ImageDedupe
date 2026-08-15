@@ -54,6 +54,12 @@ enum MediaStatusBarLayout {
         var showsSelectedCount = true
         var showsShownCount = true
         var showsDuplicateCount = true
+
+        /// Whether Download/Delete show their words or collapse to icons.
+        ///
+        /// A truncated button reading `D` is useless. Below this width they become
+        /// recognizable icons with the full name in Help and VoiceOver.
+        var showsActionTitles = true
     }
 
     /// Width the always-present controls need: destination icon, Download, reveal, Delete,
@@ -71,6 +77,9 @@ enum MediaStatusBarLayout {
     private static let resultsTitleWidth: CGFloat = 65
     private static let progressBarWidth: CGFloat = 104
     private static let progressTextWidth: CGFloat = 140
+
+    /// Extra width the Download/Delete words occupy beyond their icons.
+    private static let actionTitlesWidth: CGFloat = 110
 
     static func plan(availableWidth: CGFloat, hasProgress: Bool) -> Plan {
         var plan = Plan()
@@ -104,6 +113,9 @@ enum MediaStatusBarLayout {
         if hasProgress {
             dropIfNeeded(progressBarWidth) { $0.showsProgressBar = false }
         }
+        // Last resort, and only because an icon-only button still works while a button
+        // reading `D` does not.
+        dropIfNeeded(actionTitlesWidth) { $0.showsActionTitles = false }
         return plan
     }
 }

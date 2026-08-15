@@ -1329,9 +1329,17 @@ final class MediaBrowserViewModel: ObservableObject {
                     frameworkSummary: summary
                 ),
                 status: failed == 0
-                    ? "Delete submitted for \(removed) item(s). Scan again to confirm."
+                    ? "Deleted \(removed) item(s). Scan again to confirm."
                     : "Delete submitted: \(removed) reported removed, \(failed) failed. Scan again to confirm."
             )
+            // Hide the rows the device reported as deleted, so the list matches what the
+            // user just did. This is presentation only: the audit still records the delete
+            // as unverified, and a later scan is the sole authority — if any item is in fact
+            // still on the device, the next scan brings its row back.
+            let removedTokens = Set(summary.successful)
+            applySuccessfulDeletion(itemIDs: Set(
+                allItems.filter { removedTokens.contains($0.token) }.map(\.id)
+            ))
             return
         }
 
