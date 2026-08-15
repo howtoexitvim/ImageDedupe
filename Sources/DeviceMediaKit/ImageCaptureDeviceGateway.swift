@@ -102,6 +102,13 @@ public final class ImageCaptureDeviceGateway: NSObject, @preconcurrency ICDevice
     /// Bounded, because an unbounded retry against a phone the user does not unlock sat
     /// until the full scan timeout showing nothing — reported as the app freezing.
     private var openSessionRetryAttempt = 0
+
+    /// Entries the last accepted catalog held, used to spot a partially enumerated adopted
+    /// session before it is published as the truth.
+    private var lastAcceptedFileCount: Int?
+
+    /// Polls an adopted session whose catalog looks incomplete.
+    private var enumerationSettleTask: Task<Void, Never>?
     private var activeFrameworkProgress: Progress?
 
     public init(
@@ -559,7 +566,67 @@ public final class ImageCaptureDeviceGateway: NSObject, @preconcurrency ICDevice
 
     public func deviceDidBecomeReady(withCompleteContentCatalog device: ICCameraDevice) {
         guard device === selectedDevice else { return }
+        // The framework is explicitly stating the catalog is complete, so this is
+        // authoritative even when it is empty.
+        enumerationSettleTask?.cancel()
+        enumerationSettleTask = nil
         publishCatalog(from: device)
+    }
+
+    /// Publishes an adopted session's cache, waiting first if it looks half-enumerated.
+    ///
+    /// The readiness callback fires once per device object and will not fire again, so an
+    /// adopted session has to read `mediaFiles` directly. That reads whatever the framework
+    /// has enumerated *so far*: a scan once returned 104 files for a device holding ~3,952,
+    /// and the next scan returned the full count. Duplicates, the delete plan, and
+    /// post-delete verification are all derived from this catalog, so publishing a short one
+    /// is not cosmetic.
+    ///
+    /// There is no "enumeration finished" signal to await, so the count is re-read until it
+    /// stops growing and looks plausible against the last accepted catalog.
+    private func publishAdoptedCatalog(from camera: ICCameraDevice) {
+        let count = camera.mediaFiles?.count ?? 0
+        if DeviceCatalogCompleteness.isPlausiblyComplete(
+            sourceFileCount: count,
+            previousFileCount: lastAcceptedFileCount
+        ) {
+            publishCatalog(from: camera)
+            return
+        }
+
+        enumerationSettleTask?.cancel()
+        enumerationSettleTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            var lastCount = count
+            var stableTicks = 0
+
+            // Bounded: a device that never settles falls through to the scan timeout rather
+            // than spinning, and the scan's own cancellation still applies.
+            for _ in 0..<100 {
+                try? await Task.sleep(for: .milliseconds(100))
+                if Task.isCancelled { return }
+                guard self.selectedDevice === camera, self.scanAbortError == nil else { return }
+
+                let current = camera.mediaFiles?.count ?? 0
+                if current == lastCount {
+                    stableTicks += 1
+                } else {
+                    stableTicks = 0
+                }
+                lastCount = current
+
+                let settled = stableTicks >= 3
+                let plausible = DeviceCatalogCompleteness.isPlausiblyComplete(
+                    sourceFileCount: current,
+                    previousFileCount: self.lastAcceptedFileCount
+                )
+                if plausible || (settled && current > 0) {
+                    self.enumerationSettleTask = nil
+                    self.publishCatalog(from: camera)
+                    return
+                }
+            }
+        }
     }
 
     /// Builds the catalog snapshot from whatever the device currently lists and finishes
@@ -587,13 +654,15 @@ public final class ImageCaptureDeviceGateway: NSObject, @preconcurrency ICDevice
             resolved[token] = file
         }
         catalogGeneration = generation
+        lastAcceptedFileCount = cameraFiles.count
         filesByToken = resolved
         filenamesByToken = catalogIndex.filenamesByToken
         finishScan(.success(DeviceCatalogSnapshot(
             generation: generation,
             deviceName: device.name ?? "unknown",
             deviceIdentityHash: Self.deviceIdentityHash(for: device),
-            files: catalogIndex.files
+            files: catalogIndex.files,
+            sourceFileCount: cameraFiles.count
         )))
     }
 
@@ -796,6 +865,10 @@ public final class ImageCaptureDeviceGateway: NSObject, @preconcurrency ICDevice
 
     private func abortScan(with error: DeviceCallbackError) {
         cancelOpenSessionRetry()
+        // A settle poll must not publish a catalog for a scan the user cancelled or that
+        // timed out.
+        enumerationSettleTask?.cancel()
+        enumerationSettleTask = nil
         // Read the device before stopping: `stopBrowsing` clears the browsed binding. An
         // aborted scan produced no trustworthy catalog, so its session is discarded too.
         let abortingDevice = selectedDevice ?? commandDevice
@@ -856,7 +929,7 @@ public final class ImageCaptureDeviceGateway: NSObject, @preconcurrency ICDevice
                 // `mediaFiles` reflects the deletion, so publishing directly is both correct
                 // and immediate.
                 isSessionCatalogStale = false
-                publishCatalog(from: camera)
+                publishAdoptedCatalog(from: camera)
             } else {
                 requestOpenSession(on: camera)
             }

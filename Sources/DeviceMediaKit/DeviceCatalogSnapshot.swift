@@ -17,16 +17,22 @@ public struct DeviceCatalogSnapshot: Equatable, Codable, Sendable {
     public let deviceIdentityHash: String?
     public let files: [DeviceCatalogFile]
 
+    /// Entries the framework listed before de-duplication, so a caller can tell a genuinely
+    /// small catalog from a truncated one.
+    public let sourceFileCount: Int
+
     public init(
         generation: UUID,
         deviceName: String,
         deviceIdentityHash: String? = nil,
-        files: [DeviceCatalogFile]
+        files: [DeviceCatalogFile],
+        sourceFileCount: Int? = nil
     ) {
         self.generation = generation
         self.deviceName = deviceName
         self.deviceIdentityHash = deviceIdentityHash
         self.files = files
+        self.sourceFileCount = sourceFileCount ?? files.count
     }
 }
 
