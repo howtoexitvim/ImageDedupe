@@ -73,6 +73,7 @@ final class MediaBrowserSelectionTests: XCTestCase {
     func testSelectAllVisibleUsesFilteredOrderOnly() {
         let viewModel = viewModel()
         viewModel.searchText = "a.heic"
+        viewModel.flushPendingSearch()
         viewModel.selectAllVisible()
 
         XCTAssertEqual(viewModel.selectedActionIDs, ["a"])
@@ -120,6 +121,8 @@ final class MediaBrowserSelectionTests: XCTestCase {
         XCTAssertEqual(viewModel.selectedActionIDs.count, 4)
 
         viewModel.searchText = "c.heic"
+
+        viewModel.flushPendingSearch()
         viewModel.refreshVisibleOrder()
 
         XCTAssertEqual(viewModel.selectedActionIDs, ["c"])

@@ -121,6 +121,8 @@ final class KeyboardOwnershipTests: XCTestCase {
         XCTAssertEqual(viewModel.selectedActionIDs.count, 6)
 
         viewModel.searchText = "c.heic"
+
+        viewModel.flushPendingSearch()
         viewModel.refreshVisibleOrder()
 
         XCTAssertEqual(viewModel.selectedActionIDs, ["c"])
@@ -132,8 +134,11 @@ final class KeyboardOwnershipTests: XCTestCase {
         viewModel.selectAllVisible()
 
         viewModel.searchText = "c.heic"
+
+        viewModel.flushPendingSearch()
         viewModel.refreshVisibleOrder()
         viewModel.searchText = ""
+        viewModel.flushPendingSearch()
         viewModel.refreshVisibleOrder()
 
         XCTAssertEqual(
@@ -149,6 +154,8 @@ final class KeyboardOwnershipTests: XCTestCase {
         viewModel.select(item("c"))
 
         viewModel.searchText = "c.heic"
+
+        viewModel.flushPendingSearch()
         viewModel.refreshVisibleOrder()
 
         XCTAssertEqual(viewModel.selectedItemID, "c")

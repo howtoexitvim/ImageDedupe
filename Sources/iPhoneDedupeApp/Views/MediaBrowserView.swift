@@ -154,7 +154,7 @@ struct MediaBrowserView: View {
         ToolbarItem(placement: .principal) {
             NativeSearchField(
                 text: $viewModel.searchText,
-                placeholder: "name, kind:heic, size:>2mb, duration:<10s",
+                placeholder: "Name, or kind:heic size:>2mb duration:<10s",
                 onFocusChange: { hasFocus in
                     // While the search field edits text, media shortcuts must not fire.
                     viewModel.setFocusOwner(hasFocus ? .search : .none)
@@ -162,7 +162,7 @@ struct MediaBrowserView: View {
             )
             .frame(height: 28)
             .frame(minWidth: 220, idealWidth: 360, maxWidth: 520)
-            .help("Smart search: plain text or tokens like kind:heic size:>2mb duration:<10s")
+            .help("Type a filename, or use prefixes: name: kind: size: duration:. Text with no prefix searches the name.")
         }
 
         ToolbarItemGroup(placement: .primaryAction) {

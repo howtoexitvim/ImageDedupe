@@ -395,6 +395,113 @@ final class MediaSelectionStateTests: XCTestCase {
         XCTAssertEqual(state.actionSelectedIDs, ["a", "b", "e"])
     }
 
+    // MARK: - Drag deselection
+
+    /// Reported 2026-08-15: a drag could only ever add. Finder decides from the item the
+    /// drag starts on — begin on a selected row and the drag removes.
+    func testDragStartingOnASelectedRowDeselectsTheRange() {
+        var state = state()
+        state.actionSelectedIDs = ["a", "b", "c", "d"]
+
+        state.beginDragSelection(at: "b")
+        state.updateDragSelection(to: "c")
+        state.endDragSelection()
+
+        XCTAssertEqual(state.actionSelectedIDs, ["a", "d"])
+    }
+
+    func testDragStartingOnAnUnselectedRowStillSelects() {
+        var state = state()
+        state.beginDragSelection(at: "b")
+        state.updateDragSelection(to: "d")
+        state.endDragSelection()
+
+        XCTAssertEqual(state.actionSelectedIDs, ["b", "c", "d"])
+    }
+
+    func testDeselectingDragShrinkingRestoresRowsItNoLongerCovers() {
+        var state = state()
+        state.actionSelectedIDs = ["a", "b", "c", "d", "e"]
+
+        state.beginDragSelection(at: "b")
+        state.updateDragSelection(to: "d")
+        XCTAssertEqual(state.actionSelectedIDs, ["a", "e"])
+
+        state.updateDragSelection(to: "c")
+        XCTAssertEqual(state.actionSelectedIDs, ["a", "d", "e"], "row d comes back")
+    }
+
+    func testDeselectingDragLeavesRowsOutsideTheRangeAlone() {
+        var state = state()
+        state.actionSelectedIDs = ["a", "c", "e"]
+
+        state.beginDragSelection(at: "c")
+        state.updateDragSelection(to: "c")
+        state.endDragSelection()
+
+        XCTAssertEqual(state.actionSelectedIDs, ["a", "e"])
+    }
+
+    func testDragDirectionIsDecidedOnceAtTheStart() {
+        var state = state()
+        state.actionSelectedIDs = ["c"]
+
+        // Starts on a selected row, so the whole drag deselects even as it covers
+        // unselected rows.
+        state.beginDragSelection(at: "c")
+        state.updateDragSelection(to: "e")
+        state.endDragSelection()
+
+        XCTAssertTrue(state.actionSelectedIDs.isEmpty)
+    }
+
+    func testANewDragReevaluatesDirection() {
+        var state = state()
+        state.beginDragSelection(at: "a")
+        state.updateDragSelection(to: "b")
+        state.endDragSelection()
+        XCTAssertEqual(state.actionSelectedIDs, ["a", "b"])
+
+        // Second drag starts on a now-selected row, so it removes.
+        state.beginDragSelection(at: "a")
+        state.updateDragSelection(to: "b")
+        state.endDragSelection()
+        XCTAssertTrue(state.actionSelectedIDs.isEmpty)
+    }
+
+    func testDeselectingMarqueeRemovesIntersectingItems() {
+        var state = state()
+        state.actionSelectedIDs = ["a", "b", "c", "d"]
+
+        state.beginMarqueeSelection(additive: false, deselecting: true)
+        state.updateMarqueeSelection(intersecting: ["b", "c"])
+        state.endDragSelection()
+
+        XCTAssertEqual(state.actionSelectedIDs, ["a", "d"])
+    }
+
+    func testDeselectingMarqueeShrinkingRestoresItems() {
+        var state = state()
+        state.actionSelectedIDs = ["a", "b", "c"]
+
+        state.beginMarqueeSelection(additive: false, deselecting: true)
+        state.updateMarqueeSelection(intersecting: ["a", "b", "c"])
+        XCTAssertTrue(state.actionSelectedIDs.isEmpty)
+
+        state.updateMarqueeSelection(intersecting: ["a"])
+        XCTAssertEqual(state.actionSelectedIDs, ["b", "c"])
+    }
+
+    /// A deselecting marquee must not wipe the selection the way a plain one does.
+    func testDeselectingMarqueeDoesNotClearTheSelectionUpFront() {
+        var state = state()
+        state.actionSelectedIDs = ["a", "e"]
+
+        state.beginMarqueeSelection(additive: false, deselecting: true)
+
+        XCTAssertEqual(state.actionSelectedIDs, ["a", "e"])
+    }
+
     // MARK: - Marquee selection
 
     func testMarqueeSelectsIntersectingItems() {
@@ -416,13 +523,28 @@ final class MediaSelectionStateTests: XCTestCase {
         XCTAssertEqual(state.actionSelectedIDs, ["b"])
     }
 
-    func testPlainMarqueeReplacesTheExistingSelection() {
+    /// Regression: a second marquee used to clear whatever the first had selected, so the
+    /// Grid and the List disagreed about the same gesture. Both are additive now.
+    func testASecondMarqueeKeepsTheFirstSelection() {
+        var state = state()
+        state.beginMarqueeSelection()
+        state.updateMarqueeSelection(intersecting: ["a", "b"])
+        state.endDragSelection()
+
+        state.beginMarqueeSelection()
+        state.updateMarqueeSelection(intersecting: ["d", "e"])
+        state.endDragSelection()
+
+        XCTAssertEqual(state.actionSelectedIDs, ["a", "b", "d", "e"])
+    }
+
+    func testMarqueeAddsToASelectionMadeByOtherMeans() {
         var state = state()
         state.toggleActionSelection("e")
-        state.beginMarqueeSelection(additive: false)
+        state.beginMarqueeSelection()
         state.updateMarqueeSelection(intersecting: ["a"])
 
-        XCTAssertEqual(state.actionSelectedIDs, ["a"])
+        XCTAssertEqual(state.actionSelectedIDs, ["a", "e"])
     }
 
     func testAdditiveMarqueeKeepsTheExistingSelection() {

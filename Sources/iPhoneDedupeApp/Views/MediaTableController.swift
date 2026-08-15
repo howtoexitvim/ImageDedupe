@@ -22,6 +22,8 @@ final class MediaTableController {
         let rawValue: Int
         static let shift = Modifiers(rawValue: 1 << 0)
         static let command = Modifiers(rawValue: 1 << 1)
+        /// Finder's deselect modifier for a marquee drag.
+        static let option = Modifiers(rawValue: 1 << 2)
 
         init(rawValue: Int) { self.rawValue = rawValue }
 
@@ -29,6 +31,7 @@ final class MediaTableController {
             var result = Modifiers([])
             if flags.contains(.shift) { result.insert(.shift) }
             if flags.contains(.command) { result.insert(.command) }
+            if flags.contains(.option) { result.insert(.option) }
             self = result
         }
     }

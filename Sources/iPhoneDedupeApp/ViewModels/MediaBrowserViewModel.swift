@@ -60,7 +60,48 @@ final class MediaBrowserViewModel: ObservableObject {
     var onSortChanged: ((MediaSortField, DeduperCore.SortOrder) -> Void)?
 
     @Published var reviewScope: MediaReviewScope = .allMedia
-    @Published var searchText = ""
+    /// What the user has typed. Bound directly to the search field so typing always feels
+    /// immediate.
+    @Published var searchText = "" {
+        didSet {
+            guard searchText != oldValue else { return }
+            scheduleSearchApply()
+        }
+    }
+
+    /// The query the catalog is actually filtered by. Trails `searchText` by the debounce
+    /// interval so a 4,000-item derivation does not run on every keystroke.
+    @Published private(set) var appliedSearchText = ""
+
+    /// How long typing must pause before the query is applied.
+    static let searchDebounceInterval: Duration = .milliseconds(180)
+
+    private var searchDebounceTask: Task<Void, Never>?
+
+    private func scheduleSearchApply() {
+        // Cancelling supersedes the previous pending query rather than queueing another.
+        searchDebounceTask?.cancel()
+        let pending = searchText
+        searchDebounceTask = Task { [weak self] in
+            try? await Task.sleep(for: Self.searchDebounceInterval)
+            guard !Task.isCancelled, let self, self.searchText == pending else { return }
+            self.applySearchText(pending)
+        }
+    }
+
+    /// Applies the pending query immediately, for tests and for anything that must not wait
+    /// for the debounce (a scan publishing a new catalog, for example).
+    func applySearchText(_ text: String) {
+        searchDebounceTask?.cancel()
+        searchDebounceTask = nil
+        guard appliedSearchText != text else { return }
+        appliedSearchText = text
+        refreshVisibleOrder()
+    }
+
+    func flushPendingSearch() {
+        applySearchText(searchText)
+    }
     @Published var sortField: MediaSortField = .timestamp
     @Published var sortOrder: DeduperCore.SortOrder = .descending
     @Published private(set) var viewMode: ViewMode = .list
@@ -79,7 +120,26 @@ final class MediaBrowserViewModel: ObservableObject {
     @Published var isInspectorVisible = false
     @Published var displayScale = MediaDisplayScale(rawValue: 1.0)
     @Published var status = "Connect and unlock your iPhone, then scan."
-    @Published var isScanning = false
+    /// One admission gate for every device operation. Replaces the old `isScanning` flag,
+    /// which guarded only scan and left import and delete able to overlap each other.
+    @Published private(set) var operationState = DeviceOperationState()
+
+    /// Kept as a projection so existing views and tests read unchanged.
+    var isScanning: Bool { operationState.current == .scanning }
+
+    /// True while any device operation owns the state machine.
+    var isDeviceBusy: Bool { operationState.isBusy }
+
+    /// Claims the operation gate without touching the device, so tests can prove that a
+    /// second operation is rejected while one is in flight.
+    @discardableResult
+    func beginOperationForTesting(_ operation: DeviceOperationState.Operation) -> Bool {
+        operationState.begin(operation)
+    }
+
+    func finishOperationForTesting() {
+        operationState.finish()
+    }
     @Published var thumbnailCache: [String: NSImage] = [:]
     @Published var metadataCache: [String: MediaMetadataSummary] = [:]
     @Published var importedItemIDs: Set<String> = []
@@ -89,10 +149,20 @@ final class MediaBrowserViewModel: ObservableObject {
     @Published var importDestination = FileManager.default.urls(for: .picturesDirectory, in: .userDomainMask).first ?? URL(fileURLWithPath: NSHomeDirectory())
     @Published var lastImportedFileURL: URL?
 
-    private var thumbnailIDsInFlight = Set<String>()
+    /// Bounded, cancellable admission for per-item device work. Replaces the unbounded
+    /// in-flight sets, which let a fast scroll queue hundreds of uncancellable requests.
+    private let thumbnailRequests = MediaRequestQueue(maxConcurrent: 6)
+    private let metadataRequests = MediaRequestQueue(maxConcurrent: 3)
     private var thumbnailAccessOrder: [String] = []
     private let maxCachedThumbnails = 512
-    private var metadataIDsInFlight = Set<String>()
+
+    /// Memory ceiling for cached thumbnails, in bytes.
+    ///
+    /// A count-only limit does not bound memory: 512 large thumbnails is a very different
+    /// footprint from 512 small ones. Both limits apply, whichever binds first.
+    private let maxThumbnailCacheBytes = 192 * 1_024 * 1_024
+    private var thumbnailCacheBytes = 0
+    private var thumbnailCostByID: [String: Int] = [:]
     private var metadataAccessOrder: [String] = []
     private let maxCachedMetadataSummaries = 768
 
@@ -133,7 +203,7 @@ final class MediaBrowserViewModel: ObservableObject {
         CatalogKey(
             catalogVersion: catalogVersion,
             scope: reviewScope,
-            searchText: searchText,
+            searchText: appliedSearchText,
             sortField: sortField,
             sortOrder: sortOrder
         )
@@ -161,7 +231,7 @@ final class MediaBrowserViewModel: ObservableObject {
 
         let scopedModels = reviewScope.apply(to: allItems.map(\.model), duplicatePlan: duplicatePlan)
         let scopedIDs = Set(scopedModels.map(\.id))
-        let smartSearch = MediaSearchQuery(searchText)
+        let smartSearch = MediaSearchQuery(appliedSearchText)
         let searchedItems = allItems.filter { scopedIDs.contains($0.id) && smartSearch.matches($0.model) }
         let query = MediaQuery(
             filters: [],
@@ -212,10 +282,11 @@ final class MediaBrowserViewModel: ObservableObject {
     }
 
     func scan() {
-        guard !isScanning else {
+        guard operationState.begin(.scanning) else {
+            status = "\(operationState.current.verb) already in progress."
             return
         }
-        isScanning = true
+        let generation = operationState.generation
         status = "Scanning connected iPhone..."
         fputs("ui-scan-started\n", stderr)
         Task { [weak self] in
@@ -226,11 +297,14 @@ final class MediaBrowserViewModel: ObservableObject {
                 let payload = try await Task.detached(priority: .userInitiated) {
                     try Self.scanDevice(timeoutSeconds: 180)
                 }.value
+                // A newer scan may have started while this one was running.
+                guard self.operationState.isCurrent(generation: generation) else { return }
                 self.applyScanPayload(payload)
             } catch {
+                guard self.operationState.isCurrent(generation: generation) else { return }
                 self.status = "Scan failed: \(error)"
                 fputs("ui-scan-failed: \(error)\n", stderr)
-                self.isScanning = false
+                self.operationState.fail()
             }
         }
     }
@@ -265,9 +339,9 @@ final class MediaBrowserViewModel: ObservableObject {
     }
 
     /// Starts a Grid marquee from blank canvas.
-    func beginMarqueeSelection(additive: Bool) {
+    func beginMarqueeSelection(additive: Bool, deselecting: Bool = false) {
         refreshVisibleOrder()
-        selection.beginMarqueeSelection(additive: additive)
+        selection.beginMarqueeSelection(additive: additive, deselecting: deselecting)
     }
 
     func updateMarqueeSelection(intersecting ids: Set<String>) {
@@ -373,6 +447,12 @@ final class MediaBrowserViewModel: ObservableObject {
             status = "Select one or more items to import."
             return
         }
+        // Previously unguarded: a second Import, or an Import during a Delete, would both
+        // reach the device concurrently.
+        guard operationState.begin(.importing) else {
+            status = "\(operationState.current.verb) already in progress."
+            return
+        }
         status = "Importing \(items.count) item(s)..."
         Task.detached(priority: .userInitiated) { [weak self, destination = importDestination] in
             guard let self else { return }
@@ -385,6 +465,12 @@ final class MediaBrowserViewModel: ObservableObject {
         let items = selectedActionItems
         guard !items.isEmpty else {
             status = "Select one or more items to delete."
+            return
+        }
+        // Destructive and previously unguarded, so a double-click on the confirmation
+        // could submit the same delete twice.
+        guard operationState.begin(.deleting) else {
+            status = "\(operationState.current.verb) already in progress."
             return
         }
         status = "Deleting \(items.count) item(s)..."
@@ -426,13 +512,17 @@ final class MediaBrowserViewModel: ObservableObject {
     }
 
     func loadThumbnails(for items: [MediaItem]) {
-        let missing = items.filter { item in
-            thumbnailCache[item.id] == nil && !thumbnailIDsInFlight.contains(item.id)
+        let candidates = items.filter { thumbnailCache[$0.id] == nil }
+        guard !candidates.isEmpty else {
+            return
         }
+        // Admission is bounded, so a burst of newly visible rows cannot flood the device.
+        // Rows refused here are re-requested the next time they appear.
+        let missing = candidates.filter { thumbnailRequests.beginIfAllowed($0.id) }
         guard !missing.isEmpty else {
             return
         }
-        thumbnailIDsInFlight.formUnion(missing.map(\.id))
+        let generation = operationState.generation
 
         Task.detached(priority: .utility) { [weak self] in
             guard let self else {
@@ -446,11 +536,11 @@ final class MediaBrowserViewModel: ObservableObject {
                 loaded.append((id: item.id, image: image))
             }
             guard !loaded.isEmpty else {
-                await self.finishThumbnailRequests(ids: missing.map(\.id))
+                await self.finishThumbnailRequests(ids: missing.map(\.id), generation: generation)
                 return
             }
             try? await Task.sleep(nanoseconds: 250_000_000)
-            await self.cacheThumbnails(loaded, completedIDs: missing.map(\.id))
+            await self.cacheThumbnails(loaded, completedIDs: missing.map(\.id), generation: generation)
         }
     }
 
@@ -479,57 +569,94 @@ final class MediaBrowserViewModel: ObservableObject {
         allItems = payload.items
         duplicatePlan = payload.plan
         selection = MediaSelectionState()
+        // The previous session's outstanding requests are meaningless now.
+        thumbnailRequests.cancelAll()
+        metadataRequests.cancelAll()
+        // A scan can land while the user is mid-word. Applying the pending query now keeps
+        // the visible field and the filtered catalog in agreement, instead of showing an
+        // unfiltered list under a non-empty search box until the debounce fires.
+        flushPendingSearch()
         refreshVisibleOrder()
         importedItemIDs.removeAll()
         status = "Scanned \(payload.items.count) items. Conservative duplicates: \(payload.plan.delete.count)."
         fputs("ui-scan-succeeded: scanned=\(payload.items.count) duplicates=\(payload.plan.delete.count)\n", stderr)
-        isScanning = false
+        operationState.finish()
         Task { @MainActor [weak self, items = payload.items] in
             await Task.yield()
             self?.loadThumbnails(for: Array(items.prefix(96)))
         }
     }
 
-    private func cacheThumbnails(_ images: [(id: String, image: NSImage)], completedIDs: [String]) {
+    /// Drops results whose scan session has been superseded. Without this, a slow
+    /// thumbnail from a previous scan could land in the new session's cache under an ID
+    /// that now means a different file.
+    private func cacheThumbnails(
+        _ images: [(id: String, image: NSImage)],
+        completedIDs: [String],
+        generation: Int
+    ) {
+        guard operationState.isCurrent(generation: generation) else { return }
         for image in images {
+            if let previousCost = thumbnailCostByID[image.id] {
+                thumbnailCacheBytes -= previousCost
+            }
+            let cost = Self.thumbnailCost(of: image.image)
+            thumbnailCostByID[image.id] = cost
+            thumbnailCacheBytes += cost
+
             thumbnailCache[image.id] = image.image
             thumbnailAccessOrder.removeAll { $0 == image.id }
             thumbnailAccessOrder.append(image.id)
         }
-        finishThumbnailRequests(ids: completedIDs)
+        finishThumbnailRequests(ids: completedIDs, generation: generation)
         trimThumbnailCacheIfNeeded()
     }
 
-    private func finishThumbnailRequests(ids: [String]) {
+    private func finishThumbnailRequests(ids: [String], generation: Int) {
+        // Slots are released regardless of generation; otherwise a superseded scan would
+        // leak them and the queue would starve.
         for id in ids {
-            thumbnailIDsInFlight.remove(id)
+            thumbnailRequests.finish(id)
         }
     }
 
+    /// Evicts least-recently-used thumbnails until both the count and the memory-cost
+    /// limits are satisfied.
     private func trimThumbnailCacheIfNeeded() {
-        while thumbnailAccessOrder.count > maxCachedThumbnails {
+        while thumbnailAccessOrder.count > maxCachedThumbnails
+            || (thumbnailCacheBytes > maxThumbnailCacheBytes && !thumbnailAccessOrder.isEmpty) {
             let id = thumbnailAccessOrder.removeFirst()
             thumbnailCache.removeValue(forKey: id)
+            thumbnailCacheBytes -= thumbnailCostByID.removeValue(forKey: id) ?? 0
         }
+        thumbnailCacheBytes = max(0, thumbnailCacheBytes)
+    }
+
+    /// Approximate decoded size of an image, used as its cache cost.
+    nonisolated static func thumbnailCost(of image: NSImage) -> Int {
+        guard let representation = image.representations.first else { return 0 }
+        // 4 bytes per pixel is the usual decoded footprint for these previews.
+        return representation.pixelsWide * representation.pixelsHigh * 4
     }
 
     private func loadMetadata(for item: MediaItem) {
         guard metadataCache[item.id] == nil,
-              !metadataIDsInFlight.contains(item.id) else {
+              metadataRequests.beginIfAllowed(item.id) else {
             return
         }
-        metadataIDsInFlight.insert(item.id)
+        let generation = operationState.generation
         Task.detached(priority: .utility) { [weak self] in
             guard let self else {
                 return
             }
             let summary = MetadataProvider.summary(for: item.cameraFile, timeoutSeconds: 30)
-            await self.cacheMetadata(summary, id: item.id)
+            await self.cacheMetadata(summary, id: item.id, generation: generation)
         }
     }
 
-    private func cacheMetadata(_ summary: MediaMetadataSummary?, id: String) {
-        metadataIDsInFlight.remove(id)
+    private func cacheMetadata(_ summary: MediaMetadataSummary?, id: String, generation: Int) {
+        metadataRequests.finish(id)
+        guard operationState.isCurrent(generation: generation) else { return }
         guard let summary else {
             return
         }
@@ -549,6 +676,7 @@ final class MediaBrowserViewModel: ObservableObject {
             .map(\.id)
         importedItemIDs.formUnion(successfulIDs)
         status = "Imported \(summary.successful.count) item(s), \(summary.failed.count) failed."
+        operationState.finish()
     }
 
     private func applyDeleteSummary(_ summary: DeviceDeleteSummary, requestedIDs: Set<String>) {
@@ -559,10 +687,12 @@ final class MediaBrowserViewModel: ObservableObject {
         duplicatePlan = DuplicatePlanner.plan(files: allItems.map(\.model), rule: .nameKindSize)
         refreshVisibleOrder()
         status = "Deleted \(summary.successful.count) item(s), \(summary.failed.count) failed, \(summary.canceled.count) canceled."
+        operationState.finish()
     }
 
     private func applyDeleteFailure(_ message: String) {
         status = "Delete failed: \(message)"
+        operationState.fail()
     }
 
     private func trimMetadataCacheIfNeeded() {
