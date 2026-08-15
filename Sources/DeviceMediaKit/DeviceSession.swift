@@ -35,7 +35,7 @@ public actor DeviceSession {
         await retire()
 
         guard let client = makeClient() else {
-            throw DeviceHelperError.helperNotFound("iPhoneDedupeHelper")
+            throw DeviceHelperError.helperNotFound("ImageDedupeHelper")
         }
         current = client
 

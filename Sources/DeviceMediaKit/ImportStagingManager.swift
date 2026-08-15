@@ -25,6 +25,10 @@ public struct ImportStagingSession: Equatable, Sendable {
 }
 
 public struct ImportStagingManager: Sendable {
+    /// Keeps its original spelling deliberately. The marker identifies staging directories
+    /// already on disk, and `cleanupStaleSessions` only removes directories carrying it —
+    /// renaming it would orphan any marker left by a previous version rather than cleaning
+    /// it up. It is never shown to the user.
     public static let markerFilename = ".iphone-dedupe-staging"
     public let rootDirectory: URL
 
@@ -36,7 +40,7 @@ public struct ImportStagingManager: Sendable {
         let caches = fileManager.urls(for: .cachesDirectory, in: .userDomainMask).first
             ?? URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
         return ImportStagingManager(rootDirectory: caches
-            .appendingPathComponent("com.shuqi.iPhoneDedupe", isDirectory: true)
+            .appendingPathComponent("com.shuqi.ImageDedupe", isDirectory: true)
             .appendingPathComponent("Staging", isDirectory: true))
     }
 

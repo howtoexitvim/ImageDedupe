@@ -1,8 +1,10 @@
-# iPhone Dedupe
+# Image Dedupe
 
-iPhone Dedupe is a private, local, Mac-native app for reviewing media on a connected iPhone, downloading selected files, identifying conservative duplicate candidates, and explicitly deleting reviewed device items.
+Image Dedupe is a private, local, Mac-native app for reviewing media on a connected iPhone, downloading selected files, identifying conservative duplicate candidates, and explicitly deleting reviewed device items.
 
 It uses Apple's ImageCaptureCore framework. There is no account, cloud backend, analytics, catalog upload, or network client.
+
+Formerly named iPhone Dedupe. The rename carries existing operation history and preferences across automatically; see `docs/todo.md` for what migrates and what deliberately keeps its old name.
 
 ## Current Status
 
@@ -36,7 +38,7 @@ Build the normal local Debug app bundle:
 
 ```sh
 ./scripts/build-debug-app.sh
-open "$(swift build --show-bin-path)/iPhone Dedupe.app"
+open "$(swift build --show-bin-path)/Image Dedupe.app"
 ```
 
 Use the `.app` bundle for UI and accessibility testing. Running the raw SwiftPM executable bypasses normal macOS app registration and is not the acceptance path.
@@ -72,7 +74,7 @@ After configuring a caller-owned `notarytool` keychain profile:
 ```sh
 IPHONE_DEDUPE_SIGNING_IDENTITY="Developer ID Application: …" \
 IPHONE_DEDUPE_NOTARY_PROFILE="profile-name" \
-  ./scripts/notarize-release.sh "/path/to/iPhone Dedupe.app"
+  ./scripts/notarize-release.sh "/path/to/Image Dedupe.app"
 ```
 
 The release scripts fail closed when required signing or notarization inputs are absent. No credential is stored in this repository.
@@ -81,8 +83,8 @@ The release scripts fail closed when required signing or notarization inputs are
 
 - `Sources/DeduperCore`: pure models, search/sort, duplicate policy, presentation, and retry policy;
 - `Sources/DeviceMediaKit`: serialized ImageCaptureCore gateway and secure filesystem boundary;
-- `Sources/iPhoneDedupeApp`: SwiftUI/AppKit application, state, persistence, and views;
-- `Sources/iPhoneDedupeVerifier`: development-only real-device harness;
+- `Sources/ImageDedupeApp`: SwiftUI/AppKit application, state, persistence, and views;
+- `Sources/ImageDedupeVerifier`: development-only real-device harness;
 - `Tests`: unit, integration, renderer, operation, persistence, and security regressions;
 - `Packaging`: app Info.plist and privacy manifest;
 - `scripts`: Debug/Release bundle, verification, and notarization tooling.

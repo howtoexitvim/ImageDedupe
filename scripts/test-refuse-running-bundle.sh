@@ -5,7 +5,7 @@ set -euo pipefail
 repo_root="$(cd "$(dirname "$0")/.." && pwd)"
 guard="$repo_root/scripts/refuse-running-bundle.sh"
 mock_path="$repo_root/scripts/test-fixtures:$PATH"
-test_executable="/tmp/iPhone Dedupe.app/Contents/MacOS/iPhoneDedupeApp"
+test_executable="/tmp/Image Dedupe.app/Contents/MacOS/ImageDedupeApp"
 
 IPHONE_DEDUPE_TEST_PROCESS="/Applications/Other.app/Contents/MacOS/Other" \
     PATH="$mock_path" "$guard" "$test_executable"
