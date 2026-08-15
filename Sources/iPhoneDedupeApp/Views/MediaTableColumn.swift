@@ -82,12 +82,13 @@ enum MediaTableColumn: String, CaseIterable {
         }
     }
 
-    var alignment: NSTextAlignment {
-        switch self {
-        case .size, .duration: return .right
-        default: return .left
-        }
-    }
+    /// Every column reads from the leading edge.
+    ///
+    /// Size and Duration were right-aligned, on the usual reasoning that numerals compare
+    /// better when their digits line up. In a list whose other columns are all left-aligned
+    /// that put a ragged gap in the middle of each row, and the user asked for one
+    /// consistent edge instead.
+    var alignment: NSTextAlignment { .left }
 
     /// Name is the column that absorbs leftover width, matching Finder.
     var isFlexible: Bool { self == .name }

@@ -96,6 +96,12 @@ public final class ImageCaptureDeviceGateway: NSObject, @preconcurrency ICDevice
     private var scanCallbackToken: UUID?
     private var scanAbortError: DeviceCallbackError?
     private var openSessionRetryTask: Task<Void, Never>?
+
+    /// Consecutive "please unlock" retries for the current scan.
+    ///
+    /// Bounded, because an unbounded retry against a phone the user does not unlock sat
+    /// until the full scan timeout showing nothing — reported as the app freezing.
+    private var openSessionRetryAttempt = 0
     private var activeFrameworkProgress: Progress?
 
     public init(
@@ -129,6 +135,7 @@ public final class ImageCaptureDeviceGateway: NSObject, @preconcurrency ICDevice
             throw DeviceGatewayError.invalidBrowserMask
         }
 
+        openSessionRetryAttempt = 0
         let callback = DeviceOneShotCallback<DeviceCatalogSnapshot>()
         scanCallback = callback
         // A fresh browser per scan; the previous one is detached so its late callbacks
@@ -495,13 +502,16 @@ public final class ImageCaptureDeviceGateway: NSObject, @preconcurrency ICDevice
             if OpenSessionRetry.shouldRetry(
                 domain: frameworkError.domain,
                 code: frameworkError.code,
-                description: frameworkError.localizedDescription
+                description: frameworkError.localizedDescription,
+                attempt: openSessionRetryAttempt
             ) {
+                openSessionRetryAttempt += 1
                 scheduleOpenSessionRetry(for: device)
                 return
             }
             finishScan(.failure(.failed("Could not open ImageCaptureCore session: \(error.localizedDescription)")))
         } else {
+            openSessionRetryAttempt = 0
             cancelOpenSessionRetry()
         }
     }
