@@ -127,6 +127,13 @@ struct MediaBrowserView: View {
                     .badge(viewModel.duplicatePlan.delete.count)
                     .tag(SidebarItem.duplicates)
             }
+
+            // The rule only means anything in Duplicates, so it appears with it rather than
+            // occupying the toolbar, which is already carrying view mode, search, thumbnail
+            // size, and the inspector toggle.
+            Section("Match duplicates on") {
+                duplicateRuleFields
+            }
         }
         .listStyle(.sidebar)
         .onChange(of: sidebarSelection) { _, selection in
@@ -150,6 +157,47 @@ struct MediaBrowserView: View {
             .buttonStyle(.borderedProminent)
             .padding(12)
         }
+    }
+
+    /// The fields that decide two files are duplicates.
+    ///
+    /// Checkboxes rather than a preset list, because the user asked to combine fields
+    /// freely. A field whose removal would leave a rule that cannot identify a file is
+    /// disabled rather than hidden, so the constraint is visible before it is hit — and the
+    /// view model refuses the change as well, since a disabled control is a hint and not a
+    /// guarantee.
+    @ViewBuilder
+    private var duplicateRuleFields: some View {
+        ForEach(DuplicateRuleSelection.selectableFields, id: \.rawValue) { field in
+            let isOn = viewModel.duplicateRule.fields.contains(field)
+            Toggle(isOn: Binding(
+                get: { isOn },
+                set: { _ in viewModel.toggleDuplicateRuleField(field) }
+            )) {
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(field.displayName)
+                    if let caution = field.ruleCaution {
+                        Text(caution)
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+            }
+            .toggleStyle(.checkbox)
+            .disabled(!viewModel.canToggleDuplicateRuleField(field))
+            .help(
+                viewModel.canToggleDuplicateRuleField(field)
+                    ? "Include \(field.displayName) when matching duplicates"
+                    : "At least two fields are needed, and one must identify the file."
+            )
+        }
+
+        // Says plainly what the current rule does, so a looser rule cannot read as
+        // "these are certainly identical".
+        Text("Files matching on \(viewModel.duplicateRule.summary) are treated as copies of each other. Review each group before deleting.")
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
     }
 
     /// Window-hosted toolbar. Living in the titlebar area is what keeps it from overlapping

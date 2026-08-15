@@ -88,6 +88,13 @@ final class MediaBrowserViewModel: ObservableObject {
     private let inspectorPreviewRequest: InspectorPreviewRequest
     private let inspectorPreviewTimeout: Duration
     private let verificationScan: VerificationScan
+    private let duplicateRulePreferences: DuplicateRulePreferences
+
+    /// The fields that decide two files are duplicates.
+    ///
+    /// Published so Duplicates and the sidebar chooser stay in step. Only ever set through
+    /// `setDuplicateRule`, which recomputes the plan and retires any pending delete.
+    @Published private(set) var duplicateRule: DuplicateRuleSelection = .default
 
     /// Test-only instrumentation proving Retry Verification never resubmits a delete.
     private(set) var deleteSubmissionCountForTesting = 0
@@ -101,10 +108,13 @@ final class MediaBrowserViewModel: ObservableObject {
         },
         inspectorPreviewTimeout: Duration = .seconds(12),
         inspectorPreviewRequest: InspectorPreviewRequest? = nil,
-        verificationScan: VerificationScan? = nil
+        verificationScan: VerificationScan? = nil,
+        duplicateRulePreferences: DuplicateRulePreferences = DuplicateRulePreferences()
     ) {
         let resolvedSession = deviceSession ?? DeviceSession()
         self.deviceSession = resolvedSession
+        self.duplicateRulePreferences = duplicateRulePreferences
+        self.duplicateRule = duplicateRulePreferences.load()
         self.stagingManager = stagingManager
         self.operationResultStore = operationResultStore
         self.importPreflight = importPreflight
@@ -406,7 +416,10 @@ final class MediaBrowserViewModel: ObservableObject {
                     deviceName: snapshot.deviceName,
                     deviceIdentityHash: snapshot.deviceIdentityHash,
                     items: items,
-                    plan: DuplicatePlanner.plan(files: items.map(\.model), rule: .nameKindSize)
+                    plan: DuplicatePlanner.plan(
+                        files: items.map(\.model),
+                        definition: self.duplicateRule.definition
+                    )
                 )
                 // A newer scan may have started while this one was running.
                 guard self.operationState.isCurrent(generation: generation) else { return }
@@ -857,6 +870,48 @@ final class MediaBrowserViewModel: ObservableObject {
             return
         }
         NSWorkspace.shared.activateFileViewerSelecting([lastImportedFileURL])
+    }
+
+    /// Applies a new duplicate rule, recomputes the plan, and retires any pending delete.
+    ///
+    /// The pending snapshot must not survive: it freezes a specific set of files chosen
+    /// under the previous rule, so keeping it would let the confirmation describe one set
+    /// while the rule now means another.
+    func setDuplicateRule(_ rule: DuplicateRuleSelection) {
+        guard rule != duplicateRule else { return }
+        duplicateRule = rule
+        duplicateRulePreferences.save(rule)
+        pendingDeleteSnapshot = nil
+        isConfirmingDelete = false
+        duplicatePlan = DuplicatePlanner.plan(
+            files: allItems.map(\.model),
+            definition: rule.definition
+        )
+        refreshVisibleOrder()
+        status = "Duplicate rule: \(rule.summary). \(duplicatePlan.delete.count) redundant copies."
+    }
+
+    /// Ticks or unticks one field.
+    ///
+    /// A change that would breach the safety floor — a rule that cannot identify a file, and
+    /// so would group unrelated photos before an irreversible delete — leaves the rule
+    /// untouched. The checkbox is also disabled in that case, so this is the second line of
+    /// defence rather than the first.
+    func toggleDuplicateRuleField(_ field: MediaField) {
+        setDuplicateRule(duplicateRule.toggling(field))
+    }
+
+    /// Whether a field's checkbox can be changed without breaching the safety floor.
+    func canToggleDuplicateRuleField(_ field: MediaField) -> Bool {
+        duplicateRule.canToggle(field)
+    }
+
+    /// Recomputes the plan from the current rule, for tests that set `allItems` directly.
+    func recomputeDuplicatePlanForTesting() {
+        duplicatePlan = DuplicatePlanner.plan(
+            files: allItems.map(\.model),
+            definition: duplicateRule.definition
+        )
     }
 
     func selectReviewScope(_ scope: MediaReviewScope) {
@@ -1535,7 +1590,7 @@ final class MediaBrowserViewModel: ObservableObject {
             deviceName: snapshot.deviceName,
             deviceIdentityHash: snapshot.deviceIdentityHash,
             items: items,
-            plan: DuplicatePlanner.plan(files: items.map(\.model), rule: .nameKindSize)
+            plan: DuplicatePlanner.plan(files: items.map(\.model), definition: duplicateRule.definition)
         )
     }
 
@@ -1587,7 +1642,10 @@ final class MediaBrowserViewModel: ObservableObject {
         for itemID in itemIDs {
             importedFileURLsByItemID.removeValue(forKey: itemID)
         }
-        duplicatePlan = DuplicatePlanner.plan(files: allItems.map(\.model), rule: .nameKindSize)
+        duplicatePlan = DuplicatePlanner.plan(
+            files: allItems.map(\.model),
+            definition: duplicateRule.definition
+        )
         refreshVisibleOrder()
     }
 
