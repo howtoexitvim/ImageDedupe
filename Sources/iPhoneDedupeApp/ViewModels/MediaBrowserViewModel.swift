@@ -869,6 +869,9 @@ final class MediaBrowserViewModel: ObservableObject {
         for itemID in missingItemIDs {
             importedFileURLsByItemID.removeValue(forKey: itemID)
         }
+        if !operationState.isBusy {
+            status = "Downloaded \(importedItemIDs.count) item(s) remain locally."
+        }
         if let lastImportedFileURL, !isExistingRegularFile(lastImportedFileURL) {
             self.lastImportedFileURL = nil
         }
