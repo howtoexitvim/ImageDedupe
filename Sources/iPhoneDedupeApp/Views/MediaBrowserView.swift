@@ -78,6 +78,9 @@ struct MediaBrowserView: View {
                 viewModel.scan()
             }
         }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+            viewModel.reconcileImportedDownloads()
+        }
         .onReceive(NotificationCenter.default.publisher(for: .mediaResetLayout)) { _ in
             panePreferences.reset()
             columnVisibility = .all

@@ -87,6 +87,25 @@ final class CatalogSnapshotTests: XCTestCase {
         XCTAssertEqual(viewModel.importedItemIDs, ["id-1"])
     }
 
+    func testMissingLocalDownloadClearsBadgeWithoutRemovingDeviceItem() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("iphone-dedupe-imported-badge-\(UUID().uuidString)", isDirectory: true)
+        let downloadedFile = directory.appendingPathComponent("IMG_0000.HEIC")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        try Data("downloaded".utf8).write(to: downloadedFile)
+        let viewModel = viewModel(count: 1)
+        viewModel.recordSuccessfulDownload(itemID: "id-0", fileURL: downloadedFile)
+        viewModel.reconcileImportedDownloads()
+        XCTAssertEqual(viewModel.importedItemIDs, ["id-0"])
+
+        try FileManager.default.removeItem(at: downloadedFile)
+        viewModel.reconcileImportedDownloads()
+
+        XCTAssertTrue(viewModel.importedItemIDs.isEmpty)
+        XCTAssertEqual(viewModel.allItems.map(\.id), ["id-0"])
+    }
+
     func testEmptyCatalogProducesAnEmptySnapshot() {
         let viewModel = viewModel(count: 0)
         XCTAssertTrue(viewModel.visibleItems.isEmpty)

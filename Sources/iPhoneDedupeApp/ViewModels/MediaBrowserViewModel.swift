@@ -173,6 +173,7 @@ final class MediaBrowserViewModel: ObservableObject {
     @Published var thumbnailCache: [String: NSImage] = [:]
     @Published var metadataCache: [String: MediaMetadataSummary] = [:]
     @Published var importedItemIDs: Set<String> = []
+    private var importedFileURLsByItemID: [String: URL] = [:]
     @Published var duplicatePlan = DuplicatePlan(keep: [], delete: []) {
         didSet { catalogVersion &+= 1 }
     }
@@ -777,11 +778,18 @@ final class MediaBrowserViewModel: ObservableObject {
         if let filename = summary.successful.last?.filename {
             lastImportedFileURL = destination.appendingPathComponent(filename)
         }
-        let successfulHandles = Set(summary.successful.map(\.file.ptpObjectHandle))
-        let successfulIDs = requestedItems
-            .filter { successfulHandles.contains($0.cameraFile.ptpObjectHandle) }
-            .map(\.id)
-        importedItemIDs.formUnion(successfulIDs)
+        let requestedIDsByHandle = Dictionary(uniqueKeysWithValues: requestedItems.map {
+            ($0.cameraFile.ptpObjectHandle, $0.id)
+        })
+        for successfulDownload in summary.successful {
+            guard let itemID = requestedIDsByHandle[successfulDownload.file.ptpObjectHandle] else {
+                continue
+            }
+            recordSuccessfulDownload(
+                itemID: itemID,
+                fileURL: destination.appendingPathComponent(successfulDownload.filename)
+            )
+        }
         status = "Imported \(summary.successful.count) item(s), \(summary.failed.count) failed, \(summary.canceled.count) canceled."
         persistOperationResult(OperationResultRecord(
             id: UUID(),
@@ -837,8 +845,40 @@ final class MediaBrowserViewModel: ObservableObject {
     func applySuccessfulDeletion(itemIDs: Set<String>) {
         allItems.removeAll { itemIDs.contains($0.id) }
         importedItemIDs.subtract(itemIDs)
+        for itemID in itemIDs {
+            importedFileURLsByItemID.removeValue(forKey: itemID)
+        }
         duplicatePlan = DuplicatePlanner.plan(files: allItems.map(\.model), rule: .nameKindSize)
         refreshVisibleOrder()
+    }
+
+    func recordSuccessfulDownload(itemID: String, fileURL: URL) {
+        importedFileURLsByItemID[itemID] = fileURL.standardizedFileURL
+        importedItemIDs.insert(itemID)
+    }
+
+    /// Reconciles the session badge with the local copy after the user returns from Finder.
+    /// The device catalog item remains; only the stale local-download decoration is removed.
+    func reconcileImportedDownloads() {
+        let missingItemIDs = Set(importedFileURLsByItemID.compactMap { itemID, fileURL in
+            isExistingRegularFile(fileURL) ? nil : itemID
+        })
+        guard !missingItemIDs.isEmpty else { return }
+
+        importedItemIDs.subtract(missingItemIDs)
+        for itemID in missingItemIDs {
+            importedFileURLsByItemID.removeValue(forKey: itemID)
+        }
+        if let lastImportedFileURL, !isExistingRegularFile(lastImportedFileURL) {
+            self.lastImportedFileURL = nil
+        }
+    }
+
+    private func isExistingRegularFile(_ url: URL) -> Bool {
+        guard let attributes = try? FileManager.default.attributesOfItem(atPath: url.path) else {
+            return false
+        }
+        return attributes[.type] as? FileAttributeType == .typeRegular
     }
 
     private func applyDeleteFailure(_ message: String) {
