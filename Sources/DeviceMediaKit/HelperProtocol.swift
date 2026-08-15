@@ -18,6 +18,12 @@ public enum HelperProtocol {
     /// Bumped when the message shape changes, so a stale helper binary is rejected rather
     /// than silently misparsed.
     public static let version = 1
+
+    /// The id the helper's unsolicited `ready` greeting carries.
+    ///
+    /// It answers no request, so it needs an id no request will generate. Waiters ignore
+    /// it; a mismatched protocol version is caught when the first real request is sent.
+    public static let greetingID = UUID(uuidString: "00000000-0000-0000-0000-000000000001")!
 }
 
 /// A request sent from the app to the helper, one JSON object per line.
@@ -32,6 +38,27 @@ public enum HelperRequest: Codable, Sendable {
     case cancel
     case shutdown
 }
+
+/// A request paired with the identifier its responses must carry.
+///
+/// The app issues several requests at once — a thumbnail per visible tile, the inspector's
+/// preview, metadata, and possibly a download — onto one pipe. Without an identifier, each
+/// waiter simply took the next response to arrive, so a thumbnail could consume a
+/// download's reply (reported as "the device helper sent an unexpected response") and a
+/// tile could be handed another tile's image. Correlation is what makes concurrent requests
+/// safe on a single connection.
+public struct HelperEnvelope<Payload: Codable & Sendable>: Codable, Sendable {
+    public let id: UUID
+    public let payload: Payload
+
+    public init(id: UUID, payload: Payload) {
+        self.id = id
+        self.payload = payload
+    }
+}
+
+public typealias HelperRequestEnvelope = HelperEnvelope<HelperRequest>
+public typealias HelperResponseEnvelope = HelperEnvelope<HelperResponse>
 
 /// A response sent from the helper to the app, one JSON object per line.
 ///

@@ -1041,6 +1041,12 @@ final class MediaBrowserViewModel: ObservableObject {
         thumbnailRequests.cancelAll()
         metadataRequests.cancelAll()
         resetInspectorPreviews()
+        // Drop cached images too, not just the in-flight requests. An id is stable for a
+        // given file, but the device is free to reuse a PTP object handle for a different
+        // file in a later catalog, and a kept image would then be drawn against the wrong
+        // photo. Re-fetching a screen of thumbnails is cheap; showing the wrong picture is
+        // exactly the defect reported on 2026-08-15.
+        purgeThumbnailCache()
         // A scan can land while the user is mid-word. Applying the pending query now keeps
         // the visible field and the filtered catalog in agreement, instead of showing an
         // unfiltered list under a non-empty search box until the debounce fires.
@@ -1098,6 +1104,18 @@ final class MediaBrowserViewModel: ObservableObject {
         for id in ids {
             thumbnailRequests.finish(id)
         }
+    }
+
+    /// Drops every cached thumbnail and its bookkeeping.
+    ///
+    /// Used when a new catalog arrives: a PTP object handle may be reused for a different
+    /// file in a later scan, so an image kept across scans can end up drawn against the
+    /// wrong photo.
+    private func purgeThumbnailCache() {
+        thumbnailCache.removeAll()
+        thumbnailCostByID.removeAll()
+        thumbnailAccessOrder.removeAll()
+        thumbnailCacheBytes = 0
     }
 
     /// Evicts least-recently-used thumbnails until both the count and the memory-cost

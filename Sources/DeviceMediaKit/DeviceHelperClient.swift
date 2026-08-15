@@ -40,14 +40,19 @@ public actor DeviceHelperClient {
     private let executableURL: URL
     private var process: Process?
     private var input: FileHandle?
-    /// Buffered responses and the parked continuation waiting for one.
+    /// One mailbox per in-flight request, keyed by the id its replies carry.
     ///
-    /// An `AsyncStream.Iterator` cannot be stored in an actor and advanced with `next()`,
-    /// so the reader thread hands responses to the actor instead, and `nextResponse()`
-    /// either takes a buffered one or suspends until the reader delivers.
-    private var pendingResponses: [HelperResponse] = []
-    private var waiter: CheckedContinuation<HelperResponse?, Never>?
+    /// The app issues many requests at once on this one pipe. Before correlation existed,
+    /// each waiter took the next response to arrive, so a thumbnail could consume a
+    /// download's reply and a tile could be handed another tile's image.
+    private var mailboxes: [UUID: Mailbox] = [:]
     private var isStreamFinished = false
+
+    /// Buffered replies for one request, and whoever is parked waiting on them.
+    private struct Mailbox {
+        var pending: [HelperResponse] = []
+        var waiter: CheckedContinuation<HelperResponse?, Never>?
+    }
     private var isShutDown = false
 
     public init(executableURL: URL) {
@@ -193,9 +198,13 @@ public actor DeviceHelperClient {
     ) async throws -> T {
         guard !isShutDown else { throw DeviceHelperError.helperExited("The helper was shut down.") }
         try startIfNeeded()
-        try send(request)
 
-        while let response = await nextResponse() {
+        let id = UUID()
+        mailboxes[id] = Mailbox()
+        defer { mailboxes[id] = nil }
+        try send(request, id: id)
+
+        while let response = await nextResponse(for: id) {
             switch response {
             case .ready(let version):
                 guard version == HelperProtocol.version else {
@@ -230,9 +239,9 @@ public actor DeviceHelperClient {
         throw DeviceHelperError.helperExited(detail)
     }
 
-    private func send(_ request: HelperRequest) throws {
+    private func send(_ request: HelperRequest, id: UUID = UUID()) throws {
         guard let input else { throw DeviceHelperError.helperExited("The helper is not running.") }
-        let data = try HelperCodec.encode(request)
+        let data = try HelperCodec.encode(HelperRequestEnvelope(id: id, payload: request))
         do {
             try input.write(contentsOf: data)
         } catch {
@@ -242,30 +251,40 @@ public actor DeviceHelperClient {
 
     // MARK: - Response delivery
 
-    private func nextResponse() async -> HelperResponse? {
-        if !pendingResponses.isEmpty {
-            return pendingResponses.removeFirst()
+    private func nextResponse(for id: UUID) async -> HelperResponse? {
+        if var mailbox = mailboxes[id], !mailbox.pending.isEmpty {
+            let response = mailbox.pending.removeFirst()
+            mailboxes[id] = mailbox
+            return response
         }
         if isStreamFinished { return nil }
         return await withCheckedContinuation { continuation in
-            waiter = continuation
+            mailboxes[id]?.waiter = continuation
         }
     }
 
-    private func deliver(_ response: HelperResponse) {
-        if let waiter {
-            self.waiter = nil
-            waiter.resume(returning: response)
+    private func deliver(_ envelope: HelperResponseEnvelope) {
+        // A reply whose request has already returned or been abandoned is dropped rather
+        // than handed to an unrelated waiter.
+        guard var mailbox = mailboxes[envelope.id] else { return }
+        if let waiter = mailbox.waiter {
+            mailbox.waiter = nil
+            mailboxes[envelope.id] = mailbox
+            waiter.resume(returning: envelope.payload)
         } else {
-            pendingResponses.append(response)
+            mailbox.pending.append(envelope.payload)
+            mailboxes[envelope.id] = mailbox
         }
     }
 
     private func finishStream() {
         isStreamFinished = true
-        if let waiter {
-            self.waiter = nil
-            waiter.resume(returning: nil)
+        // Wake every waiter, or a request in flight when the helper died would hang.
+        for (id, mailbox) in mailboxes {
+            if let waiter = mailbox.waiter {
+                mailboxes[id]?.waiter = nil
+                waiter.resume(returning: nil)
+            }
         }
     }
 
@@ -277,8 +296,8 @@ public actor DeviceHelperClient {
         // The thread body must not capture the actor directly — hopping back in would send
         // a non-Sendable closure. It captures two Sendable closures instead, each of which
         // re-enters the actor on its own.
-        let onResponse: @Sendable (HelperResponse) -> Void = { [weak self] response in
-            Task { await self?.deliver(response) }
+        let onResponse: @Sendable (HelperResponseEnvelope) -> Void = { [weak self] envelope in
+            Task { await self?.deliver(envelope) }
         }
         let onFinish: @Sendable () -> Void = { [weak self] in
             Task { await self?.finishStream() }
@@ -294,11 +313,11 @@ public actor DeviceHelperClient {
                 }
                 buffer.append(chunk)
                 for line in HelperCodec.lines(from: &buffer) {
-                    guard let response = try? HelperCodec.decode(
-                        HelperResponse.self,
+                    guard let envelope = try? HelperCodec.decode(
+                        HelperResponseEnvelope.self,
                         from: line
                     ) else { continue }
-                    onResponse(response)
+                    onResponse(envelope)
                 }
             }
         }

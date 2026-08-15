@@ -127,6 +127,62 @@ final class HelperProtocolTests: XCTestCase {
         XCTAssertEqual(roundTripped, snapshot)
     }
 
+    // MARK: - Correlation
+
+    /// The defect behind two reports on 2026-08-15: Import failing with "the device helper
+    /// sent an unexpected response", and a tile showing another tile's picture.
+    ///
+    /// The app issues many requests at once on one pipe — a thumbnail per visible tile, the
+    /// inspector preview, metadata, sometimes a download. Every waiter took the *next*
+    /// response to arrive, so replies were matched to whichever request happened to be
+    /// waiting rather than to the one that asked. An envelope id makes a reply belong to
+    /// exactly one request.
+    func testResponsesCarryTheIdOfTheRequestTheyAnswer() throws {
+        let thumbnailID = UUID()
+        let downloadID = UUID()
+
+        var buffer = Data()
+        buffer.append(try HelperCodec.encode(HelperResponseEnvelope(
+            id: downloadID,
+            payload: .downloaded(summary: DeviceGatewayImportSummary())
+        )))
+        buffer.append(try HelperCodec.encode(HelperResponseEnvelope(
+            id: thumbnailID,
+            payload: .thumbnail(data: Data([0x01, 0x02]))
+        )))
+
+        let decoded = try HelperCodec.lines(from: &buffer).map {
+            try HelperCodec.decode(HelperResponseEnvelope.self, from: $0)
+        }
+
+        // The download's reply arrives first even though the thumbnail may have been
+        // requested first. Each is still attributable to its own request.
+        XCTAssertEqual(decoded[0].id, downloadID)
+        XCTAssertEqual(decoded[1].id, thumbnailID)
+        guard case .thumbnail = decoded[1].payload else {
+            return XCTFail("The thumbnail reply lost its payload")
+        }
+    }
+
+    func testRequestEnvelopePreservesItsPayloadExactly() throws {
+        let id = UUID()
+        let token = makeToken()
+        var buffer = try HelperCodec.encode(HelperRequestEnvelope(
+            id: id,
+            payload: .thumbnail(token: token, maxPixelSize: 512, timeoutSeconds: 6)
+        ))
+
+        let line = try XCTUnwrap(HelperCodec.lines(from: &buffer).first)
+        let decoded = try HelperCodec.decode(HelperRequestEnvelope.self, from: line)
+
+        XCTAssertEqual(decoded.id, id)
+        guard case let .thumbnail(decodedToken, maxPixelSize, _) = decoded.payload else {
+            return XCTFail("Expected a thumbnail request, got \(decoded.payload)")
+        }
+        XCTAssertEqual(decodedToken, token)
+        XCTAssertEqual(maxPixelSize, 512)
+    }
+
     /// A cancellation must stay distinguishable from a genuine failure: one is the user's
     /// own doing and is retryable, the other needs reporting.
     func testCancellationIsDistinguishableFromFailure() throws {

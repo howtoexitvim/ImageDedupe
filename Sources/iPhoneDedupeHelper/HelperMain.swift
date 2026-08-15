@@ -54,9 +54,10 @@ final class HelperRunner {
     private var activeOperation: Task<Void, Never>?
 
     func run() async {
-        send(.ready(version: HelperProtocol.version))
+        send(.ready(version: HelperProtocol.version), id: HelperProtocol.greetingID)
 
-        for await request in Self.requests() {
+        for await envelope in Self.requests() {
+            let request = envelope.payload
             switch request {
             case .shutdown:
                 // Wait for work already in flight instead of exiting underneath it.
@@ -79,7 +80,7 @@ final class HelperRunner {
                 let previous = activeOperation
                 activeOperation = Task { @MainActor [weak self] in
                     await previous?.value
-                    await self?.handle(request)
+                    await self?.handle(request, id: envelope.id)
                 }
             }
         }
@@ -89,7 +90,7 @@ final class HelperRunner {
         await activeOperation?.value
     }
 
-    private func handle(_ request: HelperRequest) async {
+    private func handle(_ request: HelperRequest, id: UUID) async {
         let cancellation = DeviceOperationCancellation()
         activeCancellation = cancellation
         defer { activeCancellation = nil }
@@ -98,7 +99,7 @@ final class HelperRunner {
             switch request {
             case .scan(let timeout):
                 let snapshot = try await gateway.scan(timeout: .seconds(timeout))
-                send(.scanned(snapshot: snapshot))
+                send(.scanned(snapshot: snapshot), id: id)
 
             case .thumbnail(let token, let maxPixelSize, let timeout):
                 let data = try await gateway.thumbnailData(
@@ -106,14 +107,20 @@ final class HelperRunner {
                     maxPixelSize: maxPixelSize,
                     timeout: .seconds(timeout)
                 )
-                send(.thumbnail(data: data))
+                send(.thumbnail(data: data), id: id)
 
             case .metadata(let token, let timeout):
                 let summary = try await gateway.metadata(for: token, timeout: .seconds(timeout))
-                send(.metadata(summary: summary))
+                send(.metadata(summary: summary), id: id)
 
             case .download(let tokens, let destination, let timeout):
-                try await download(tokens, to: destination, timeout: timeout, cancellation: cancellation)
+                try await download(
+                    tokens,
+                    to: destination,
+                    timeout: timeout,
+                    cancellation: cancellation,
+                    id: id
+                )
 
             case .delete(let tokens, let confirmed, let timeout):
                 // The confirmation flag is re-checked by the gateway itself; passing it
@@ -128,14 +135,14 @@ final class HelperRunner {
                             completed: progress.completedItems,
                             total: progress.totalItems,
                             filename: progress.currentFilename
-                        ))
+                        ), id: id)
                     },
                     timeout: .seconds(timeout)
                 )
                 send(.deleted(
                     summary: summary,
                     observedRemovedHandles: gateway.observedRemovals
-                ))
+                ), id: id)
 
             case .cancel, .shutdown:
                 break
@@ -144,7 +151,7 @@ final class HelperRunner {
             send(.failed(
                 message: "\(error)",
                 isCancellation: Self.isCancellation(error)
-            ))
+            ), id: id)
         }
     }
 
@@ -158,7 +165,8 @@ final class HelperRunner {
         _ tokens: [DeviceFileToken],
         to stagingDirectory: URL,
         timeout: Double,
-        cancellation: DeviceOperationCancellation
+        cancellation: DeviceOperationCancellation,
+        id: UUID
     ) async throws {
         let session = try stagingManager.adoptSession(at: stagingDirectory)
         let summary = await gateway.download(
@@ -170,15 +178,17 @@ final class HelperRunner {
                     completed: progress.completedItems,
                     total: progress.totalItems,
                     filename: progress.currentFilename
-                ))
+                ), id: id)
             },
             timeout: .seconds(timeout)
         )
-        send(.downloaded(summary: summary))
+        send(.downloaded(summary: summary), id: id)
     }
 
-    private func send(_ response: HelperResponse) {
-        guard let data = try? HelperCodec.encode(response) else { return }
+    private func send(_ response: HelperResponse, id: UUID) {
+        guard let data = try? HelperCodec.encode(
+            HelperResponseEnvelope(id: id, payload: response)
+        ) else { return }
         output.write(data)
     }
 
@@ -194,7 +204,7 @@ final class HelperRunner {
     /// Reading must not block the main actor: the gateway's callbacks are delivered there,
     /// so a blocking read would deadlock the very operation whose progress it is waiting to
     /// report — and would make `cancel` unreachable while a download was running.
-    private static func requests() -> AsyncStream<HelperRequest> {
+    private static func requests() -> AsyncStream<HelperRequestEnvelope> {
         AsyncStream { continuation in
             let thread = Thread {
                 var buffer = Data()
@@ -209,12 +219,12 @@ final class HelperRunner {
                     }
                     buffer.append(chunk)
                     for line in HelperCodec.lines(from: &buffer) {
-                        guard let request = try? HelperCodec.decode(
-                            HelperRequest.self,
+                        guard let envelope = try? HelperCodec.decode(
+                            HelperRequestEnvelope.self,
                             from: line
                         ) else { continue }
-                        continuation.yield(request)
-                        if case .shutdown = request {
+                        continuation.yield(envelope)
+                        if case .shutdown = envelope.payload {
                             continuation.finish()
                             return
                         }

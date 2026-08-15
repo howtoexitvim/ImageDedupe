@@ -949,7 +949,14 @@ public final class ImageCaptureDeviceGateway: NSObject, @preconcurrency ICDevice
     private static func makeDeviceMediaFile(_ file: ICCameraFile, fallbackIndex: Int) -> DeviceMediaFile {
         let name = file.name ?? file.originalFilename ?? "unknown-\(fallbackIndex)"
         return DeviceMediaFile(
-            id: "\(file.ptpObjectHandle)-\(fallbackIndex)-\(name)",
+            // Deliberately independent of `fallbackIndex`: a delete shifts every later file
+            // up a position, and an index-based id made the photo that slid into a vacated
+            // slot inherit the departed photo's cached thumbnail.
+            id: DeviceMediaFileIdentity.make(
+                objectHandle: file.ptpObjectHandle,
+                name: file.name ?? file.originalFilename,
+                index: fallbackIndex
+            ),
             name: name,
             kind: kind(for: file, name: name),
             size: Int64(file.fileSize),
