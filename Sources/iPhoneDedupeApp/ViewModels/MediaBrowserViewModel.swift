@@ -149,7 +149,10 @@ final class MediaBrowserViewModel: ObservableObject {
     @Published var importDestination = FileManager.default.urls(for: .picturesDirectory, in: .userDomainMask).first ?? URL(fileURLWithPath: NSHomeDirectory())
     @Published var lastImportedFileURL: URL?
 
-    private var thumbnailIDsInFlight = Set<String>()
+    /// Bounded, cancellable admission for per-item device work. Replaces the unbounded
+    /// in-flight sets, which let a fast scroll queue hundreds of uncancellable requests.
+    private let thumbnailRequests = MediaRequestQueue(maxConcurrent: 6)
+    private let metadataRequests = MediaRequestQueue(maxConcurrent: 3)
     private var thumbnailAccessOrder: [String] = []
     private let maxCachedThumbnails = 512
 
@@ -160,7 +163,6 @@ final class MediaBrowserViewModel: ObservableObject {
     private let maxThumbnailCacheBytes = 192 * 1_024 * 1_024
     private var thumbnailCacheBytes = 0
     private var thumbnailCostByID: [String: Int] = [:]
-    private var metadataIDsInFlight = Set<String>()
     private var metadataAccessOrder: [String] = []
     private let maxCachedMetadataSummaries = 768
 
@@ -510,13 +512,16 @@ final class MediaBrowserViewModel: ObservableObject {
     }
 
     func loadThumbnails(for items: [MediaItem]) {
-        let missing = items.filter { item in
-            thumbnailCache[item.id] == nil && !thumbnailIDsInFlight.contains(item.id)
+        let candidates = items.filter { thumbnailCache[$0.id] == nil }
+        guard !candidates.isEmpty else {
+            return
         }
+        // Admission is bounded, so a burst of newly visible rows cannot flood the device.
+        // Rows refused here are re-requested the next time they appear.
+        let missing = candidates.filter { thumbnailRequests.beginIfAllowed($0.id) }
         guard !missing.isEmpty else {
             return
         }
-        thumbnailIDsInFlight.formUnion(missing.map(\.id))
         let generation = operationState.generation
 
         Task.detached(priority: .utility) { [weak self] in
@@ -564,6 +569,9 @@ final class MediaBrowserViewModel: ObservableObject {
         allItems = payload.items
         duplicatePlan = payload.plan
         selection = MediaSelectionState()
+        // The previous session's outstanding requests are meaningless now.
+        thumbnailRequests.cancelAll()
+        metadataRequests.cancelAll()
         // A scan can land while the user is mid-word. Applying the pending query now keeps
         // the visible field and the filtered catalog in agreement, instead of showing an
         // unfiltered list under a non-empty search box until the debounce fires.
@@ -605,9 +613,10 @@ final class MediaBrowserViewModel: ObservableObject {
     }
 
     private func finishThumbnailRequests(ids: [String], generation: Int) {
-        guard operationState.isCurrent(generation: generation) else { return }
+        // Slots are released regardless of generation; otherwise a superseded scan would
+        // leak them and the queue would starve.
         for id in ids {
-            thumbnailIDsInFlight.remove(id)
+            thumbnailRequests.finish(id)
         }
     }
 
@@ -632,10 +641,9 @@ final class MediaBrowserViewModel: ObservableObject {
 
     private func loadMetadata(for item: MediaItem) {
         guard metadataCache[item.id] == nil,
-              !metadataIDsInFlight.contains(item.id) else {
+              metadataRequests.beginIfAllowed(item.id) else {
             return
         }
-        metadataIDsInFlight.insert(item.id)
         let generation = operationState.generation
         Task.detached(priority: .utility) { [weak self] in
             guard let self else {
@@ -647,8 +655,8 @@ final class MediaBrowserViewModel: ObservableObject {
     }
 
     private func cacheMetadata(_ summary: MediaMetadataSummary?, id: String, generation: Int) {
+        metadataRequests.finish(id)
         guard operationState.isCurrent(generation: generation) else { return }
-        metadataIDsInFlight.remove(id)
         guard let summary else {
             return
         }
