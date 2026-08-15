@@ -180,6 +180,67 @@ final class ScrollIntoViewTests: XCTestCase {
         XCTAssertGreaterThanOrEqual(MediaTableMetrics.autoScrollMargin, 40)
     }
 
+    // MARK: - Pointer depth in flipped and unflipped clip views
+
+    /// Builds a view inside a real window, because `convert(_:from: nil)` only performs a
+    /// genuine flip when the view actually belongs to a window.
+    private func hostedView(flipped: Bool) -> NSView {
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 400, height: 300),
+            styleMask: [.titled],
+            backing: .buffered,
+            defer: false
+        )
+        let view = flipped
+            ? FlippedView(frame: NSRect(x: 0, y: 0, width: 400, height: 300))
+            : NSView(frame: NSRect(x: 0, y: 0, width: 400, height: 300))
+        window.contentView?.addSubview(view)
+        return view
+    }
+
+    /// Regression: the pointer depth subtracted from `bounds.maxY` unconditionally. Table
+    /// and collection views are flipped, and `convert(_:from: nil)` already returns
+    /// top-down coordinates for them, so flipping again reversed the scroll direction —
+    /// dragging below the list scrolled *up*.
+    func testPointerDepthMeasuresFromTheTopInAFlippedView() {
+        let clip = hostedView(flipped: true)
+
+        // Window y grows upward, so a small window y is near the *bottom* of the view.
+        let depthAtWindowBottom = MediaScrollGeometry.pointerDepth(of: NSPoint(x: 10, y: 10), in: clip)
+        let depthAtWindowTop = MediaScrollGeometry.pointerDepth(of: NSPoint(x: 10, y: 290), in: clip)
+
+        XCTAssertEqual(depthAtWindowBottom, 290, "near the window bottom is deep into the view")
+        XCTAssertEqual(depthAtWindowTop, 10, "near the window top is shallow")
+    }
+
+    func testPointerDepthMeasuresFromTheTopInAnUnflippedView() {
+        let clip = hostedView(flipped: false)
+
+        let depthAtWindowBottom = MediaScrollGeometry.pointerDepth(of: NSPoint(x: 10, y: 10), in: clip)
+        let depthAtWindowTop = MediaScrollGeometry.pointerDepth(of: NSPoint(x: 10, y: 290), in: clip)
+
+        // Same answer as the flipped case: the helper's whole job is to normalize this.
+        XCTAssertEqual(depthAtWindowBottom, 290)
+        XCTAssertEqual(depthAtWindowTop, 10)
+    }
+
+    /// The behaviour the user reported: dragging below the content must scroll down.
+    func testDraggingBelowTheContentScrollsDown() {
+        let clip = hostedView(flipped: true)
+        let depth = MediaScrollGeometry.pointerDepth(of: NSPoint(x: 10, y: -200), in: clip)
+        let velocity = MediaTableMetrics.autoScrollVelocity(pointerY: depth, viewportHeight: 300)
+
+        XCTAssertGreaterThan(velocity, 0, "below the content must scroll down, not up")
+    }
+
+    func testDraggingAboveTheContentScrollsUp() {
+        let clip = hostedView(flipped: true)
+        let depth = MediaScrollGeometry.pointerDepth(of: NSPoint(x: 10, y: 500), in: clip)
+        let velocity = MediaTableMetrics.autoScrollVelocity(pointerY: depth, viewportHeight: 300)
+
+        XCTAssertLessThan(velocity, 0, "above the content must scroll up, not down")
+    }
+
     // MARK: - Marquee rectangle
 
     func testMarqueeRectNormalizesADragUpAndLeft() {
@@ -216,4 +277,10 @@ final class ScrollIntoViewTests: XCTestCase {
         XCTAssertGreaterThan(afterScroll.height, beforeScroll.height)
         XCTAssertEqual(afterScroll.minY, anchor.y)
     }
+}
+
+/// Stands in for a clip view enclosing a table or collection view, both of which are
+/// flipped.
+private final class FlippedView: NSView {
+    override var isFlipped: Bool { true }
 }

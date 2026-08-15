@@ -49,6 +49,21 @@ enum MediaScrollGeometry {
     /// extending. Vertical overshoot is deliberately unlimited.
     static let horizontalDragAbandonMargin: CGFloat = 160
 
+    /// The pointer's distance from the **top** of a clip view, which is what
+    /// `MediaTableMetrics.autoScrollVelocity` expects.
+    ///
+    /// `NSTableView` and `NSCollectionView` are flipped, and so is their enclosing clip
+    /// view, meaning a converted point's `y` already grows downward. Subtracting it from
+    /// `bounds.maxY` — as this code originally did — flips it a second time and reverses
+    /// the scroll direction. Reading `isFlipped` keeps this correct for either kind of
+    /// view rather than assuming one.
+    static func pointerDepth(of pointInWindow: NSPoint, in clipView: NSView) -> CGFloat {
+        let pointInClip = clipView.convert(pointInWindow, from: nil)
+        return clipView.isFlipped
+            ? pointInClip.y - clipView.bounds.minY
+            : clipView.bounds.maxY - pointInClip.y
+    }
+
     /// Whether a drag at `point` should still extend the selection.
     ///
     /// This models Finder and Explorer, where dragging *above or below* the list — even

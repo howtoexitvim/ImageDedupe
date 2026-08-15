@@ -188,8 +188,7 @@ final class MediaNativeCollectionView: NSCollectionView {
 
     private func updateAutoScroll(for event: NSEvent) {
         guard let clipView = enclosingScrollView?.contentView else { return }
-        let pointInClip = clipView.convert(event.locationInWindow, from: nil)
-        let pointerY = clipView.bounds.maxY - pointInClip.y
+        let pointerY = MediaScrollGeometry.pointerDepth(of: event.locationInWindow, in: clipView)
         let velocity = MediaTableMetrics.autoScrollVelocity(
             pointerY: pointerY,
             viewportHeight: clipView.bounds.height
@@ -224,8 +223,7 @@ final class MediaNativeCollectionView: NSCollectionView {
                   viewport: visibleRect
               ) else { return }
 
-        let pointInClip = clipView.convert(pointInWindow, from: nil)
-        let pointerY = clipView.bounds.maxY - pointInClip.y
+        let pointerY = MediaScrollGeometry.pointerDepth(of: pointInWindow, in: clipView)
         let velocity = MediaTableMetrics.autoScrollVelocity(
             pointerY: pointerY,
             viewportHeight: clipView.bounds.height

@@ -177,9 +177,7 @@ final class MediaNativeTableView: NSTableView {
 
     private func updateAutoScroll(for event: NSEvent) {
         guard let clipView = enclosingScrollView?.contentView else { return }
-        let pointInClip = clipView.convert(event.locationInWindow, from: nil)
-        // Flip into top-down coordinates so "near the top edge" is a small number.
-        let pointerY = clipView.bounds.maxY - pointInClip.y
+        let pointerY = MediaScrollGeometry.pointerDepth(of: event.locationInWindow, in: clipView)
         let velocity = MediaTableMetrics.autoScrollVelocity(
             pointerY: pointerY,
             viewportHeight: clipView.bounds.height
@@ -209,8 +207,7 @@ final class MediaNativeTableView: NSTableView {
               let coordinator,
               let pointInWindow = lastDragPointInWindow else { return }
 
-        let pointInClip = clipView.convert(pointInWindow, from: nil)
-        let pointerY = clipView.bounds.maxY - pointInClip.y
+        let pointerY = MediaScrollGeometry.pointerDepth(of: pointInWindow, in: clipView)
         let velocity = MediaTableMetrics.autoScrollVelocity(
             pointerY: pointerY,
             viewportHeight: clipView.bounds.height
