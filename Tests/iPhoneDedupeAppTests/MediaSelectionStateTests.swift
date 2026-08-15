@@ -395,6 +395,95 @@ final class MediaSelectionStateTests: XCTestCase {
         XCTAssertEqual(state.actionSelectedIDs, ["a", "b", "e"])
     }
 
+    // MARK: - Marquee selection
+
+    func testMarqueeSelectsIntersectingItems() {
+        var state = state()
+        state.beginMarqueeSelection(additive: false)
+        state.updateMarqueeSelection(intersecting: ["b", "c"])
+
+        XCTAssertEqual(state.actionSelectedIDs, ["b", "c"])
+    }
+
+    /// Shrinking the marquee deselects what the marquee itself added, the same way the
+    /// List's drag range shrinks.
+    func testShrinkingTheMarqueeDeselectsItemsItNoLongerCovers() {
+        var state = state()
+        state.beginMarqueeSelection(additive: false)
+        state.updateMarqueeSelection(intersecting: ["b", "c", "d"])
+        state.updateMarqueeSelection(intersecting: ["b"])
+
+        XCTAssertEqual(state.actionSelectedIDs, ["b"])
+    }
+
+    func testPlainMarqueeReplacesTheExistingSelection() {
+        var state = state()
+        state.toggleActionSelection("e")
+        state.beginMarqueeSelection(additive: false)
+        state.updateMarqueeSelection(intersecting: ["a"])
+
+        XCTAssertEqual(state.actionSelectedIDs, ["a"])
+    }
+
+    func testAdditiveMarqueeKeepsTheExistingSelection() {
+        var state = state()
+        state.toggleActionSelection("e")
+        state.beginMarqueeSelection(additive: true)
+        state.updateMarqueeSelection(intersecting: ["a"])
+
+        XCTAssertEqual(state.actionSelectedIDs, ["a", "e"])
+    }
+
+    func testAdditiveMarqueeShrinkingKeepsThePreDragSelection() {
+        var state = state()
+        state.toggleActionSelection("e")
+        state.beginMarqueeSelection(additive: true)
+        state.updateMarqueeSelection(intersecting: ["a", "b"])
+        state.updateMarqueeSelection(intersecting: ["a"])
+
+        XCTAssertEqual(state.actionSelectedIDs, ["a", "e"])
+    }
+
+    func testMarqueeIgnoresIDsOutsideTheVisibleOrder() {
+        var state = state()
+        state.beginMarqueeSelection(additive: false)
+        state.updateMarqueeSelection(intersecting: ["b", "not-a-real-id"])
+
+        XCTAssertEqual(state.actionSelectedIDs, ["b"])
+    }
+
+    func testMarqueeUpdatesAreIgnoredBeforeItBegins() {
+        var state = state()
+        state.updateMarqueeSelection(intersecting: ["a", "b"])
+
+        XCTAssertTrue(state.actionSelectedIDs.isEmpty)
+    }
+
+    func testEndingTheMarqueeKeepsItsResult() {
+        var state = state()
+        state.beginMarqueeSelection(additive: false)
+        state.updateMarqueeSelection(intersecting: ["b", "c"])
+        state.endDragSelection()
+
+        XCTAssertEqual(state.actionSelectedIDs, ["b", "c"])
+        XCTAssertFalse(state.isDragSelecting)
+    }
+
+    func testMarqueeReportsDragInProgress() {
+        var state = state()
+        XCTAssertFalse(state.isDragSelecting)
+        state.beginMarqueeSelection(additive: false)
+        XCTAssertTrue(state.isDragSelecting)
+    }
+
+    func testMarqueeTakesFocusOwnership() {
+        var state = state()
+        state.focusOwner = .none
+        state.beginMarqueeSelection(additive: false)
+
+        XCTAssertEqual(state.focusOwner, .mediaBrowser)
+    }
+
     // MARK: - Focus owner isolation
 
     func testInspectorFocusDoesNotClearMediaSelection() {

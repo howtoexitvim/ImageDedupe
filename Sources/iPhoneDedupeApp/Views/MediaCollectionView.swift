@@ -69,6 +69,7 @@ struct MediaCollectionView: NSViewRepresentable {
 
         private var items: [MediaBrowserViewModel.MediaItem] = []
         private var lastRenderKey: RenderKey?
+        private var marqueeOverlay: MediaMarqueeOverlayView?
 
         private struct RenderKey: Equatable {
             let ids: [String]
@@ -128,14 +129,25 @@ struct MediaCollectionView: NSViewRepresentable {
             )
         }
 
+        /// Scrolls the focused item into view keeping a row of context around it, using the
+        /// same geometry as the List so both renderers feel identical.
         func scrollFocusIntoView() {
             guard let collectionView,
+                  let clipView = scrollView?.contentView,
                   let focusedID = viewModel.selectedItemID,
-                  let index = items.firstIndex(where: { $0.id == focusedID }) else { return }
-            collectionView.scrollToItems(
-                at: [IndexPath(item: index, section: 0)],
-                scrollPosition: .nearestHorizontalEdge
-            )
+                  let index = items.firstIndex(where: { $0.id == focusedID }),
+                  let attributes = collectionView.layoutAttributesForItem(
+                      at: IndexPath(item: index, section: 0)
+                  ) else { return }
+
+            guard let origin = MediaScrollGeometry.originToRevealItem(
+                attributes.frame,
+                in: clipView.documentVisibleRect
+            ) else { return }
+
+            let maxOrigin = max(0, collectionView.bounds.height - clipView.bounds.height)
+            clipView.scroll(to: NSPoint(x: clipView.bounds.origin.x, y: min(origin, maxOrigin)))
+            scrollView?.reflectScrolledClipView(clipView)
         }
 
         /// Pushes current focus/selection into the live item views without a full reload.
@@ -188,6 +200,46 @@ struct MediaCollectionView: NSViewRepresentable {
             guard let collectionView,
                   let indexPath = collectionView.indexPathForItem(at: point) else { return nil }
             return indexPath.item
+        }
+
+        // MARK: - Marquee
+
+        /// IDs of every item whose frame intersects the marquee rectangle.
+        ///
+        /// Asking the layout for attributes covers items that are scrolled out of view but
+        /// inside the rect, which matters once edge auto-scroll extends the marquee beyond
+        /// the visible area.
+        func itemIDs(intersecting rect: NSRect) -> Set<String> {
+            guard let collectionView,
+                  let layout = collectionView.collectionViewLayout else { return [] }
+
+            var ids = Set<String>()
+            for (index, item) in items.enumerated() {
+                guard let attributes = layout.layoutAttributesForItem(
+                    at: IndexPath(item: index, section: 0)
+                ) else { continue }
+                if attributes.frame.intersects(rect) {
+                    ids.insert(item.id)
+                }
+            }
+            return ids
+        }
+
+        func showMarquee(_ rect: NSRect) {
+            guard let collectionView else { return }
+            let overlay = marqueeOverlay ?? {
+                let view = MediaMarqueeOverlayView()
+                collectionView.addSubview(view)
+                marqueeOverlay = view
+                return view
+            }()
+            overlay.frame = collectionView.bounds
+            overlay.marqueeRect = rect
+        }
+
+        func endMarquee() {
+            marqueeOverlay?.removeFromSuperview()
+            marqueeOverlay = nil
         }
 
         func click(index: Int, modifiers: MediaTableController.Modifiers) {

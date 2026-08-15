@@ -129,8 +129,17 @@ final class MediaNativeTableView: NSTableView {
                 didBeginDrag = true
             }
 
+            // Dragging above or below the list keeps auto-scrolling, even off the window,
+            // which is what makes long selections possible. Only a pointer that has
+            // wandered far sideways stops extending.
+            let pointInView = convert(event.locationInWindow, from: nil)
+            guard MediaScrollGeometry.dragShouldExtend(at: pointInView, viewport: visibleRect) else {
+                stopAutoScroll()
+                continue
+            }
+
             lastDragPointInWindow = event.locationInWindow
-            let point = convert(event.locationInWindow, from: nil)
+            let point = pointInView
             let draggedRow = clampedRow(at: point)
             coordinator.controller.updateDrag(toRow: draggedRow)
             coordinator.refreshFocusDecoration()
@@ -168,9 +177,7 @@ final class MediaNativeTableView: NSTableView {
 
     private func updateAutoScroll(for event: NSEvent) {
         guard let clipView = enclosingScrollView?.contentView else { return }
-        let pointInClip = clipView.convert(event.locationInWindow, from: nil)
-        // Flip into top-down coordinates so "near the top edge" is a small number.
-        let pointerY = clipView.bounds.maxY - pointInClip.y
+        let pointerY = MediaScrollGeometry.pointerDepth(of: event.locationInWindow, in: clipView)
         let velocity = MediaTableMetrics.autoScrollVelocity(
             pointerY: pointerY,
             viewportHeight: clipView.bounds.height
@@ -182,11 +189,17 @@ final class MediaNativeTableView: NSTableView {
         }
         guard autoScrollTimer == nil else { return }
 
-        autoScrollTimer = Timer.scheduledTimer(withTimeInterval: 1.0 / 60.0, repeats: true) { [weak self] _ in
+        // `Timer.scheduledTimer` only registers for `.default` run loop mode, but AppKit
+        // runs in `.eventTracking` while the mouse is down, so such a timer never fires
+        // during a drag — which is why auto-scroll appeared not to work at all. Adding the
+        // timer to `.common` covers both modes.
+        let timer = Timer(timeInterval: 1.0 / 60.0, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated {
                 self?.stepAutoScroll()
             }
         }
+        RunLoop.current.add(timer, forMode: .common)
+        autoScrollTimer = timer
     }
 
     private func stepAutoScroll() {
@@ -194,8 +207,7 @@ final class MediaNativeTableView: NSTableView {
               let coordinator,
               let pointInWindow = lastDragPointInWindow else { return }
 
-        let pointInClip = clipView.convert(pointInWindow, from: nil)
-        let pointerY = clipView.bounds.maxY - pointInClip.y
+        let pointerY = MediaScrollGeometry.pointerDepth(of: pointInWindow, in: clipView)
         let velocity = MediaTableMetrics.autoScrollVelocity(
             pointerY: pointerY,
             viewportHeight: clipView.bounds.height

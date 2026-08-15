@@ -9,6 +9,11 @@ import AppKit
 final class MediaNativeCollectionView: NSCollectionView {
     weak var coordinator: MediaCollectionView.Coordinator?
 
+    private var autoScrollTimer: Timer?
+    private var lastDragPointInWindow: NSPoint?
+    /// In document coordinates, so the marquee stays anchored to content during scrolling.
+    private var marqueeAnchor: NSPoint?
+
     override var acceptsFirstResponder: Bool { true }
 
     /// The sidebar's SwiftUI list otherwise keeps first responder, which sends the arrow
@@ -106,17 +111,141 @@ final class MediaNativeCollectionView: NSCollectionView {
 
         let point = convert(event.locationInWindow, from: nil)
         guard let index = coordinator.index(at: point) else {
-            // A click on empty canvas only takes focus; it does not clear the selection,
-            // which stays an explicit Escape action.
-            coordinator.refreshVisibleDecoration()
+            // Blank canvas starts a marquee. A click that never travels far enough stays a
+            // plain click and only takes focus; it does not clear the selection, which
+            // remains an explicit Escape action.
+            trackMarquee(startingAt: point, initialEvent: event)
             return
         }
 
         if event.clickCount >= 2 {
             coordinator.doubleClick(index: index)
-        } else {
-            coordinator.click(index: index, modifiers: MediaTableController.Modifiers(event.modifierFlags))
+            return
         }
+
+        coordinator.click(index: index, modifiers: MediaTableController.Modifiers(event.modifierFlags))
+    }
+
+    // MARK: - Marquee selection
+
+    /// Rubber-band selection with edge auto-scroll, mirroring the List's drag behaviour.
+    ///
+    /// The anchor is kept in document coordinates so the marquee stays pinned to content
+    /// while auto-scroll moves the viewport underneath it.
+    private func trackMarquee(startingAt anchor: NSPoint, initialEvent: NSEvent) {
+        guard let coordinator else { return }
+        let origin = initialEvent.locationInWindow
+        var didBegin = false
+
+        while let event = window?.nextEvent(matching: [.leftMouseDragged, .leftMouseUp]) {
+            if event.type == .leftMouseUp { break }
+
+            if !didBegin {
+                let travelled = hypot(
+                    event.locationInWindow.x - origin.x,
+                    event.locationInWindow.y - origin.y
+                )
+                guard travelled >= MediaTableMetrics.dragActivationDistance else { continue }
+                let modifiers = MediaTableController.Modifiers(event.modifierFlags)
+                coordinator.viewModel.beginMarqueeSelection(
+                    additive: modifiers.contains(.command) || modifiers.contains(.shift)
+                )
+                marqueeAnchor = anchor
+                didBegin = true
+            }
+
+            // Dragging above or below the grid keeps auto-scrolling, even off the window.
+            // Only a pointer that has wandered far sideways stops extending.
+            let pointInView = convert(event.locationInWindow, from: nil)
+            guard MediaScrollGeometry.dragShouldExtend(at: pointInView, viewport: visibleRect) else {
+                stopAutoScroll()
+                continue
+            }
+
+            lastDragPointInWindow = event.locationInWindow
+            updateMarquee(to: pointInView)
+            updateAutoScroll(for: event)
+        }
+
+        stopAutoScroll()
+        if didBegin {
+            coordinator.viewModel.endDragSelection()
+            coordinator.endMarquee()
+            marqueeAnchor = nil
+            coordinator.refreshVisibleDecoration()
+        }
+    }
+
+    private func updateMarquee(to point: NSPoint) {
+        guard let coordinator, let anchor = marqueeAnchor else { return }
+        let rect = MediaScrollGeometry.marqueeRect(from: anchor, to: point)
+        coordinator.showMarquee(rect)
+        coordinator.viewModel.updateMarqueeSelection(intersecting: coordinator.itemIDs(intersecting: rect))
+        coordinator.refreshVisibleDecoration()
+    }
+
+    // MARK: - Auto-scroll
+
+    private func updateAutoScroll(for event: NSEvent) {
+        guard let clipView = enclosingScrollView?.contentView else { return }
+        let pointerY = MediaScrollGeometry.pointerDepth(of: event.locationInWindow, in: clipView)
+        let velocity = MediaTableMetrics.autoScrollVelocity(
+            pointerY: pointerY,
+            viewportHeight: clipView.bounds.height
+        )
+
+        if velocity == 0 {
+            stopAutoScroll()
+            return
+        }
+        guard autoScrollTimer == nil else { return }
+
+        // Must be added to `.common`, not scheduled on `.default`: AppKit runs in
+        // `.eventTracking` mode while the mouse is down, so a default-mode timer never
+        // fires during the drag that needs it.
+        let timer = Timer(timeInterval: 1.0 / 60.0, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated {
+                self?.stepAutoScroll()
+            }
+        }
+        RunLoop.current.add(timer, forMode: .common)
+        autoScrollTimer = timer
+    }
+
+    private func stepAutoScroll() {
+        guard let clipView = enclosingScrollView?.contentView,
+              let pointInWindow = lastDragPointInWindow,
+              // The timer runs in `.common` mode, so it keeps firing after the drag loop
+              // has decided to stop extending. Without this the marquee kept growing from
+              // a stale point once the pointer wandered sideways off the grid.
+              MediaScrollGeometry.dragShouldExtend(
+                  at: convert(pointInWindow, from: nil),
+                  viewport: visibleRect
+              ) else { return }
+
+        let pointerY = MediaScrollGeometry.pointerDepth(of: pointInWindow, in: clipView)
+        let velocity = MediaTableMetrics.autoScrollVelocity(
+            pointerY: pointerY,
+            viewportHeight: clipView.bounds.height
+        )
+        guard velocity != 0 else {
+            stopAutoScroll()
+            return
+        }
+
+        let maxOriginY = max(0, bounds.height - clipView.bounds.height)
+        let newOriginY = min(max(clipView.bounds.origin.y + velocity, 0), maxOriginY)
+        clipView.scroll(to: NSPoint(x: clipView.bounds.origin.x, y: newOriginY))
+        enclosingScrollView?.reflectScrolledClipView(clipView)
+
+        // The pointer has not moved, but the content under it has, so the marquee must
+        // grow to cover the newly revealed items.
+        updateMarquee(to: convert(pointInWindow, from: nil))
+    }
+
+    private func stopAutoScroll() {
+        autoScrollTimer?.invalidate()
+        autoScrollTimer = nil
     }
 
     override func menu(for event: NSEvent) -> NSMenu? {

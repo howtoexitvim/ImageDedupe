@@ -123,22 +123,40 @@ enum MediaTableMetrics {
     static let dragActivationDistance: CGFloat = 4
 
     /// Distance from a viewport edge within which a drag starts auto-scrolling.
-    static let autoScrollMargin: CGFloat = 24
-    static let maximumAutoScrollVelocity: CGFloat = 18
+    ///
+    /// Finder and Explorer both start scrolling from a band *inside* the edge, then hold
+    /// full speed for as long as the pointer stays beyond it — including outside the
+    /// window. A wider band than the previous 24 pt makes the gesture much easier to find.
+    static let autoScrollMargin: CGFloat = 48
+    static let maximumAutoScrollVelocity: CGFloat = 24
 
-    /// Points-per-tick scroll velocity for a drag at `pointerY` inside the viewport.
-    /// Negative scrolls toward the top, positive toward the bottom, zero is idle.
-    /// Velocity increases closer to the edge so a slow drag still reaches distant rows.
+    /// Points-per-tick scroll velocity for a drag at `pointerY`, measured from the top of
+    /// the viewport. Negative scrolls toward the top, positive toward the bottom, zero is
+    /// idle.
+    ///
+    /// Two rules, both matching Finder:
+    ///
+    /// - Inside the edge band, speed ramps up as the pointer approaches the edge, so slow
+    ///   precise dragging near the boundary does not lurch.
+    /// - **Past** the edge, speed pins to the maximum and stays there. Earlier this clamped
+    ///   the pointer back into the viewport, which made a drag well past the boundary
+    ///   compute a smaller depth and even pick the wrong branch, so scrolling would stall
+    ///   or reverse direction.
     static func autoScrollVelocity(pointerY: CGFloat, viewportHeight: CGFloat) -> CGFloat {
         guard viewportHeight > autoScrollMargin * 2 else { return 0 }
 
         if pointerY < autoScrollMargin {
-            let depth = (autoScrollMargin - max(pointerY, 0)) / autoScrollMargin
+            // Beyond the top edge: full speed upward, never reversing.
+            guard pointerY > 0 else { return -maximumAutoScrollVelocity }
+            let depth = (autoScrollMargin - pointerY) / autoScrollMargin
             return -depth * maximumAutoScrollVelocity
         }
+
         let bottomEdge = viewportHeight - autoScrollMargin
         if pointerY > bottomEdge {
-            let depth = (min(pointerY, viewportHeight) - bottomEdge) / autoScrollMargin
+            // Beyond the bottom edge: full speed downward, never reversing.
+            guard pointerY < viewportHeight else { return maximumAutoScrollVelocity }
+            let depth = (pointerY - bottomEdge) / autoScrollMargin
             return depth * maximumAutoScrollVelocity
         }
         return 0
