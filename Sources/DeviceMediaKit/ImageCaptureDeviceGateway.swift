@@ -109,6 +109,19 @@ public final class ImageCaptureDeviceGateway: NSObject, @preconcurrency ICDevice
 
     /// Polls an adopted session whose catalog looks incomplete.
     private var enumerationSettleTask: Task<Void, Never>?
+
+    /// Fails the scan quickly when no *usable* session materialises.
+    ///
+    /// Traced on 2026-08-16 against a locked iPhone: the device **is** advertised, and
+    /// `didOpenSessionWithError` fires exactly once with -9943 "Please unlock". The gateway
+    /// then re-requests, and the framework never calls back again — a second
+    /// `requestOpenSession` on a device whose session did not open is ignored, just as it is
+    /// on one already open. So the retry counter never advanced, the retry-exhausted branch
+    /// was never reached, and the scan sat until its full timeout with nothing on screen.
+    ///
+    /// Bounding the wait itself is what fixes that, rather than counting callbacks that
+    /// never arrive.
+    private var discoveryDeadlineTask: Task<Void, Never>?
     private var activeFrameworkProgress: Progress?
 
     public init(
@@ -174,6 +187,7 @@ public final class ImageCaptureDeviceGateway: NSObject, @preconcurrency ICDevice
                 self.scanCallbackToken = token
                 // Browsing is live again, so removals once more mean a real disconnect.
                 self.hasStoppedBrowserDeliberately = false
+                self.startDiscoveryDeadline()
                 self.browser.start()
                 // ImageCaptureCore only reports devices it considers newly discovered. A
                 // device this process already holds is not re-advertised, so a second scan
@@ -487,6 +501,8 @@ public final class ImageCaptureDeviceGateway: NSObject, @preconcurrency ICDevice
         commandDevice = camera
         retainedDevice = camera
         camera.delegate = self
+        // Deliberately does *not* cancel the deadline. A locked iPhone is advertised and
+        // then never opens a session, so "a device appeared" is not progress on its own.
         requestOpenSession(on: camera)
     }
 
@@ -518,8 +534,11 @@ public final class ImageCaptureDeviceGateway: NSObject, @preconcurrency ICDevice
             }
             finishScan(.failure(.failed("Could not open ImageCaptureCore session: \(error.localizedDescription)")))
         } else {
+            // A session is open: real progress, so the deadline no longer applies. Reading a
+            // large catalog may legitimately take longer and keeps the scan timeout.
             openSessionRetryAttempt = 0
             cancelOpenSessionRetry()
+            cancelDiscoveryDeadline()
         }
     }
 
@@ -859,12 +878,14 @@ public final class ImageCaptureDeviceGateway: NSObject, @preconcurrency ICDevice
     private func finishScan(_ result: Result<DeviceCatalogSnapshot, DeviceCallbackError>) {
         guard let callback = scanCallback, let token = scanCallbackToken else { return }
         cancelOpenSessionRetry()
+        cancelDiscoveryDeadline()
         scanAbortError = nil
         callback.complete(token: token, result: result)
     }
 
     private func abortScan(with error: DeviceCallbackError) {
         cancelOpenSessionRetry()
+        cancelDiscoveryDeadline()
         // A settle poll must not publish a catalog for a scan the user cancelled or that
         // timed out.
         enumerationSettleTask?.cancel()
@@ -918,6 +939,7 @@ public final class ImageCaptureDeviceGateway: NSObject, @preconcurrency ICDevice
             commandDevice = camera
             retainedDevice = camera
             camera.delegate = self
+            cancelDiscoveryDeadline()
             if camera.hasOpenSession {
                 // The catalog is already enumerated on this open session, so the readiness
                 // callback will not fire again; publish what the device already has.
@@ -1104,6 +1126,41 @@ public final class ImageCaptureDeviceGateway: NSObject, @preconcurrency ICDevice
             self.openSessionRetryTask = nil
             self.requestOpenSession(on: selectedDevice)
         }
+    }
+
+    /// Fails the scan if no usable session appears within `DeviceDiscoveryPolicy.deadline`.
+    ///
+    /// Covers both ways this stalls: no device advertised at all, and a device advertised
+    /// whose session never opens because the phone is locked. In the second case the
+    /// framework stops calling back entirely, so only a deadline can end the wait.
+    private func startDiscoveryDeadline() {
+        discoveryDeadlineTask?.cancel()
+        discoveryDeadlineTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: DeviceDiscoveryPolicy.deadline)
+            guard let self, !Task.isCancelled else { return }
+            // Only a delivered catalog counts as progress.
+            //
+            // `hasOpenSession` was tried here first and is useless: a locked iPhone reports
+            // it as `true` while refusing to serve anything, so the guard returned early and
+            // the scan still hung for the full timeout. `scanCallback` is cleared exactly
+            // when the scan settles, so a pending callback means nothing has arrived.
+            guard self.scanCallback != nil else { return }
+            self.discoveryDeadlineTask = nil
+            self.cancelOpenSessionRetry()
+
+            // Worded so `DeviceRecoveryAdvice` classifies it as `deviceLocked`. A locked
+            // phone is by far the most common cause, and the guidance — unlock it, then scan
+            // again — is right for the other causes too.
+            let message = self.selectedDevice == nil
+                ? "No iPhone was offered by ImageCaptureCore. Please unlock the iPhone and scan again."
+                : "The iPhone did not accept a session. Please unlock the iPhone and scan again."
+            self.finishScan(.failure(.failed(message)))
+        }
+    }
+
+    private func cancelDiscoveryDeadline() {
+        discoveryDeadlineTask?.cancel()
+        discoveryDeadlineTask = nil
     }
 
     private func requestOpenSession(on device: ICDevice) {

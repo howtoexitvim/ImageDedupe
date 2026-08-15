@@ -513,7 +513,15 @@ final class MediaBrowserViewModel: ObservableObject {
                 return
             }
             do {
-                let snapshot = try await self.deviceSession.scan(timeout: .seconds(180))
+                // Bounded by the policy ceiling rather than a flat 180 seconds, which read
+                // as the app having hung when the iPhone was locked. The ceiling scales with
+                // the last known catalog size, so a large library gets proportionally more
+                // time rather than inheriting a cap chosen for a small one.
+                let snapshot = try await self.deviceSession.scan(
+                    timeout: DeviceDiscoveryPolicy.scanCeiling(
+                        previousFileCount: self.allItems.isEmpty ? nil : self.allItems.count
+                    )
+                )
                 let items = snapshot.files.map { MediaItem(model: $0.model, token: $0.token) }
                 let payload = ScanPayload(
                     deviceName: snapshot.deviceName,

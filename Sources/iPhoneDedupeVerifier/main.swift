@@ -113,10 +113,16 @@ private func printUsage() {
 }
 
 @MainActor
+/// Scans, retrying only transient failures.
+///
+/// `attempts` defaults to 1 because retrying multiplies a wait the user already experiences
+/// as a hang: with a locked iPhone and a 180-second timeout this turned one stall into 559
+/// seconds. The app itself scans once and lets the user press Scan again, which is both
+/// faster to fail and clearer about why.
 private func scanWithRetry(
     gateway: ImageCaptureDeviceGateway,
     timeout: TimeInterval,
-    attempts: Int = 3,
+    attempts: Int = 1,
     delaySeconds: TimeInterval = 3
 ) async throws -> DeviceCatalogSnapshot {
     var lastError: Error?
