@@ -60,6 +60,12 @@ public final class ImageCaptureDeviceGateway: NSObject, @preconcurrency ICDevice
     /// when browsing next starts.
     private var hasStoppedBrowserDeliberately = false
 
+    /// PTP object handles the framework reported as removed during the current session.
+    ///
+    /// Cleared whenever the session is refreshed, because handles may be reused for other
+    /// files in a later catalog and stale evidence must never confirm a newer delete.
+    private var observedRemovedHandles: Set<UInt32> = []
+
     private var catalogGeneration: UUID?
     private var filesByToken: [DeviceFileToken: ICCameraFile] = [:]
     private var filenamesByToken: [DeviceFileToken: String] = [:]
@@ -109,8 +115,12 @@ public final class ImageCaptureDeviceGateway: NSObject, @preconcurrency ICDevice
             let snapshot = try await callback.wait(
                 timeout: timeout,
                 onTimeout: {
-                    await self.scheduler.invalidate()
+                    // A scan only reads; a timed-out one leaves nothing uncertain on the
+                    // device, so the user (and the post-delete verification retry) can try
+                    // again instead of being told to reopen the app.
+                    await self.scheduler.suspendForReadTimeout()
                     self.abortScan(with: .timedOut)
+                    await self.scheduler.resumeAfterAcknowledgedCancellation()
                 },
                 onCancel: {
                     // A canceled scan reads nothing and mutates nothing, so the gateway
@@ -163,8 +173,12 @@ public final class ImageCaptureDeviceGateway: NSObject, @preconcurrency ICDevice
         do {
             return try await callback.wait(
                 timeout: timeout,
-                onTimeout: { await self.scheduler.invalidate() },
-                // A canceled preview read is harmless; it must not latch the gateway.
+                // Preview reads mutate nothing, so neither a timeout nor a cancel may
+                // latch the gateway; both stay retryable.
+                onTimeout: {
+                    await self.scheduler.suspendForReadTimeout()
+                    await self.scheduler.resumeAfterAcknowledgedCancellation()
+                },
                 onCancel: {
                     await self.scheduler.suspendForCancellation()
                     await self.scheduler.resumeAfterAcknowledgedCancellation()
@@ -206,8 +220,12 @@ public final class ImageCaptureDeviceGateway: NSObject, @preconcurrency ICDevice
         do {
             return try await callback.wait(
                 timeout: timeout,
-                onTimeout: { await self.scheduler.invalidate() },
-                // A canceled preview read is harmless; it must not latch the gateway.
+                // Preview reads mutate nothing, so neither a timeout nor a cancel may
+                // latch the gateway; both stay retryable.
+                onTimeout: {
+                    await self.scheduler.suspendForReadTimeout()
+                    await self.scheduler.resumeAfterAcknowledgedCancellation()
+                },
                 onCancel: {
                     await self.scheduler.suspendForCancellation()
                     await self.scheduler.resumeAfterAcknowledgedCancellation()
@@ -514,7 +532,20 @@ public final class ImageCaptureDeviceGateway: NSObject, @preconcurrency ICDevice
     }
 
     public func cameraDevice(_ camera: ICCameraDevice, didAdd items: [ICCameraItem]) {}
-    public func cameraDevice(_ camera: ICCameraDevice, didRemove items: [ICCameraItem]) {}
+
+    /// Authoritative removal evidence from the open session.
+    ///
+    /// Lets a delete be confirmed without rescanning the whole catalog. The framework's
+    /// *completion* callback cannot be trusted for this — a device test saw it report
+    /// success for a file that was still present — but this reports what the device
+    /// actually dropped, so it is real evidence rather than a claim.
+    public func cameraDevice(_ camera: ICCameraDevice, didRemove items: [ICCameraItem]) {
+        guard camera === commandDevice else { return }
+        for item in items {
+            guard let file = item as? ICCameraFile else { continue }
+            observedRemovedHandles.insert(file.ptpObjectHandle)
+        }
+    }
     public func cameraDevice(_ camera: ICCameraDevice, didReceiveThumbnail thumbnail: CGImage?, for item: ICCameraItem, error: Error?) {}
     public func cameraDevice(_ camera: ICCameraDevice, didReceiveMetadata metadata: [AnyHashable: Any]?, for item: ICCameraItem, error: Error?) {}
     public func cameraDevice(_ camera: ICCameraDevice, didRenameItems items: [ICCameraItem]) {}
@@ -734,6 +765,24 @@ public final class ImageCaptureDeviceGateway: NSObject, @preconcurrency ICDevice
     private func refreshDeviceSession() {
         stopBrowsing()
         commandDevice = nil
+        observedRemovedHandles.removeAll()
+    }
+
+    /// Whether the framework reported this object handle as removed in the current session.
+    ///
+    /// Authoritative: this is the device saying what it dropped, unlike the delete
+    /// completion callback, which was observed claiming success for a file that remained.
+    public func hasObservedRemoval(objectHandle: UInt32) -> Bool {
+        observedRemovedHandles.contains(objectHandle)
+    }
+
+    public func recordObservedRemovalsForTesting(_ handles: Set<UInt32>) {
+        observedRemovedHandles.formUnion(handles)
+    }
+
+    /// Handles the device reported as removed during the current session.
+    public var observedRemovals: Set<UInt32> {
+        observedRemovedHandles
     }
 
     // MARK: - Test seams

@@ -191,6 +191,98 @@ final class DeleteVerificationPhaseTests: XCTestCase {
         }
     }
 
+    // MARK: - Fast verification from framework removal evidence
+
+    func testRemovalEvidenceConfirmsDeletionWithoutAFullRescan() async {
+        var verificationScanCount = 0
+        let viewModel = makeViewModel(verificationScan: { _ in
+            verificationScanCount += 1
+            throw DeviceGatewayError.timeout("iPhone media catalog")
+        })
+        let item = mediaItem(named: "IMG_9100.HEIC")
+        viewModel.allItems = [item]
+        viewModel.refreshVisibleOrder()
+
+        // The device itself reported the object handle as removed on the open session.
+        viewModel.startDeleteVerificationForTesting(
+            snapshot: snapshot(named: item.model.name, token: item.token),
+            summary: DeviceGatewayDeleteSummary(successful: [item.token]),
+            observedRemovedHandles: [item.token.objectHandle]
+        )
+        await waitUntil { !viewModel.isDeviceBusy }
+
+        XCTAssertEqual(
+            verificationScanCount,
+            0,
+            "Framework removal evidence should confirm without a ~4,000-file rescan."
+        )
+        let audit = viewModel.operationHistory.first?.deleteAudit
+        XCTAssertEqual(audit?.verificationState, .verified)
+        XCTAssertEqual(audit?.items.first?.outcome, .confirmedRemoved)
+        XCTAssertTrue(viewModel.allItems.isEmpty, "The confirmed row should be removed.")
+    }
+
+    func testMissingRemovalEvidenceStillFallsBackToAFullRescan() async {
+        var verificationScanCount = 0
+        let viewModel = makeViewModel(verificationScan: { _ in
+            verificationScanCount += 1
+            return DeviceCatalogSnapshot(
+                generation: UUID(),
+                deviceName: "iPhone",
+                deviceIdentityHash: nil,
+                files: []
+            )
+        })
+        let item = mediaItem(named: "IMG_9101.HEIC")
+
+        // No removal callback arrived, so the framework's success claim is unproven and the
+        // catalog remains the only truth. A device test saw exactly this: a reported success
+        // for a file that was still present.
+        viewModel.startDeleteVerificationForTesting(
+            snapshot: snapshot(named: item.model.name, token: item.token),
+            summary: DeviceGatewayDeleteSummary(successful: [item.token]),
+            observedRemovedHandles: []
+        )
+        await waitUntil { !viewModel.isDeviceBusy }
+
+        XCTAssertEqual(verificationScanCount, 1, "Without evidence, the rescan must still run.")
+    }
+
+    func testPartialRemovalEvidenceStillRescansForTheUnprovenItems() async {
+        var verificationScanCount = 0
+        let viewModel = makeViewModel(verificationScan: { _ in
+            verificationScanCount += 1
+            return DeviceCatalogSnapshot(
+                generation: UUID(),
+                deviceName: "iPhone",
+                deviceIdentityHash: nil,
+                files: []
+            )
+        })
+        let proven = DeviceFileToken.fixture(objectHandle: 11, name: "A.HEIC")
+        let unproven = DeviceFileToken.fixture(objectHandle: 22, name: "B.HEIC")
+        let snapshot = DeletePlanSnapshot(
+            deviceName: "Test iPhone",
+            items: [
+                DeletePlanSnapshot.Item(token: proven, filename: "A.HEIC", kind: "HEIC", size: 1),
+                DeletePlanSnapshot.Item(token: unproven, filename: "B.HEIC", kind: "HEIC", size: 1)
+            ]
+        )
+
+        viewModel.startDeleteVerificationForTesting(
+            snapshot: snapshot,
+            summary: DeviceGatewayDeleteSummary(successful: [proven, unproven]),
+            observedRemovedHandles: [proven.objectHandle]
+        )
+        await waitUntil { !viewModel.isDeviceBusy }
+
+        XCTAssertEqual(
+            verificationScanCount,
+            1,
+            "One unproven item is enough to require the catalog rescan."
+        )
+    }
+
     // MARK: - Retry Verification is scan-only
 
     func testRetryVerificationRunsAScanAndNeverResubmitsDelete() async {

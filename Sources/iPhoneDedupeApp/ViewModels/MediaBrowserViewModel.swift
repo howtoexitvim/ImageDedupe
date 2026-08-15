@@ -677,7 +677,11 @@ final class MediaBrowserViewModel: ObservableObject {
                         self.applyOperationProgress(update, for: .deleting)
                     }
                 )
-                self.beginVerification(snapshot: snapshot, summary: summary)
+                self.beginVerification(
+                    snapshot: snapshot,
+                    summary: summary,
+                    observedRemovedHandles: self.gateway.observedRemovals
+                )
             } catch {
                 let summary = DeviceGatewayDeleteSummary(failed: snapshot.items.map {
                     DeviceOperationFailure(
@@ -1191,7 +1195,8 @@ final class MediaBrowserViewModel: ObservableObject {
     /// Starts post-delete verification. Test seam for the phase and its cancellation.
     func startDeleteVerificationForTesting(
         snapshot: DeletePlanSnapshot,
-        summary: DeviceGatewayDeleteSummary
+        summary: DeviceGatewayDeleteSummary,
+        observedRemovedHandles: Set<UInt32> = []
     ) {
         if !operationState.isBusy {
             operationState.begin(.deleting)
@@ -1202,13 +1207,57 @@ final class MediaBrowserViewModel: ObservableObject {
         if operationCancellation == nil {
             operationCancellation = DeviceOperationCancellation()
         }
-        beginVerification(snapshot: snapshot, summary: summary)
+        beginVerification(
+            snapshot: snapshot,
+            summary: summary,
+            observedRemovedHandles: observedRemovedHandles
+        )
+    }
+
+    /// Confirms a delete from the framework's own removal callbacks, skipping the rescan.
+    ///
+    /// A full catalog rescan of ~4,000 files is what made deleting one photo feel far slower
+    /// than the Phase 6 flow. Phase 6 was faster only because it trusted the delete
+    /// completion callback, which a device test proved unreliable: it reported success for
+    /// `IMG_3879.HEIC` while that file was still on the phone. `cameraDevice(_:didRemove:)`
+    /// is different — it is the device reporting what it actually dropped — so it is real
+    /// evidence, and every item must be covered by it before the rescan can be skipped.
+    private func confirmedAuditFromRemovalEvidence(
+        snapshot: DeletePlanSnapshot,
+        summary: DeviceGatewayDeleteSummary,
+        observedRemovedHandles: Set<UInt32>
+    ) -> DeleteAudit? {
+        guard !snapshot.items.isEmpty else { return nil }
+        let successful = Set(summary.successful)
+        guard snapshot.items.allSatisfy({
+            successful.contains($0.token) && observedRemovedHandles.contains($0.token.objectHandle)
+        }) else {
+            return nil
+        }
+        return DeleteAudit(
+            snapshot: snapshot,
+            verificationState: .verified,
+            verifiedAt: Date(),
+            verificationReason: "Confirmed by the device's own removal notification.",
+            frameworkSummary: summary,
+            items: snapshot.items.map { planned in
+                DeleteAudit.Item(
+                    token: planned.token,
+                    filename: planned.filename,
+                    kind: planned.kind,
+                    size: planned.size,
+                    outcome: .confirmedRemoved,
+                    reason: nil
+                )
+            }
+        )
     }
 
     /// Runs verification in an owned, cancelable task.
     private func beginVerification(
         snapshot: DeletePlanSnapshot,
-        summary: DeviceGatewayDeleteSummary
+        summary: DeviceGatewayDeleteSummary,
+        observedRemovedHandles: Set<UInt32> = []
     ) {
         // Nothing reached the device: finish now rather than making the user sit through a
         // misleading destructive-looking phase for an answer already known.
@@ -1222,6 +1271,25 @@ final class MediaBrowserViewModel: ObservableObject {
                     frameworkSummary: summary
                 ),
                 status: "Delete was not submitted: \(reason) Nothing was removed."
+            )
+            return
+        }
+
+        // The device already told us these objects are gone, so confirm immediately instead
+        // of rescanning the whole catalog.
+        if let audit = confirmedAuditFromRemovalEvidence(
+            snapshot: snapshot,
+            summary: summary,
+            observedRemovedHandles: observedRemovedHandles
+        ) {
+            applySuccessfulDeletion(itemIDs: Set(
+                allItems
+                    .filter { item in snapshot.items.contains { $0.token == item.token } }
+                    .map(\.id)
+            ))
+            finishVerification(
+                audit: audit,
+                status: "Delete verified: \(audit.items.count) removed."
             )
             return
         }

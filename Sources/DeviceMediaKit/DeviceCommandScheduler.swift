@@ -114,6 +114,16 @@ public actor DeviceCommandScheduler {
         rejectAllWaiters(in: &lowPriorityWaiters)
     }
 
+    /// Holds new submissions while a timed-out read is torn down.
+    ///
+    /// Scan, thumbnail, and metadata issue no mutating command, so an unfinished one leaves
+    /// nothing uncertain on the device and must stay retryable. Latching here is what made a
+    /// timed-out post-delete verification scan poison every following retry with
+    /// `invalidated`, so the delete could never be verified without relaunching.
+    public func suspendForReadTimeout() {
+        suspendForCancellation()
+    }
+
     /// Holds new submissions while a user-initiated cancellation settles.
     ///
     /// Queued work is rejected so nothing is submitted on top of a command being torn down,

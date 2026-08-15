@@ -231,6 +231,14 @@ private func deleteExactName(_ args: Arguments) async throws {
     print("deleteSuccessful=\(summary.successful.count)")
     print("deleteFailed=\(summary.failed.count)")
     print("deleteCanceled=\(summary.canceled.count)")
+
+    // Evidence from the device's own removal notification, which the app uses to confirm a
+    // delete without rescanning the whole catalog. Reported here so the fast path can be
+    // measured against the authoritative rescan below.
+    let observed = gateway.observedRemovals
+    let provenByCallback = matches.filter { observed.contains($0.token.objectHandle) }
+    print("observedRemovalEvidence=\(provenByCallback.count) of \(matches.count)")
+
     let after = try await scanWithRetry(gateway: gateway, timeout: args.timeout)
     let remaining = after.files.filter { $0.model.name == targetName }
     print("scannedAfter=\(after.files.count)")

@@ -64,6 +64,36 @@ final class SchedulerRecoveryTests: XCTestCase {
         }
     }
 
+    /// A timed-out *read* must stay retryable.
+    ///
+    /// Observed on a real device: a post-delete verification scan timed out, which latched
+    /// the gateway, so the verifier's own retry loop then failed with `invalidated` and the
+    /// delete could never be verified in that process. A scan issues no mutating command,
+    /// so an unfinished one leaves nothing uncertain on the device.
+    func testTimedOutReadStaysRetryableInsteadOfLatchingTheGateway() async throws {
+        let scheduler = DeviceCommandScheduler()
+
+        await scheduler.suspendForReadTimeout()
+        await scheduler.resumeAfterAcknowledgedCancellation()
+
+        let retry = try await scheduler.acquire(priority: .high, generation: nil)
+        await scheduler.release(retry)
+    }
+
+    func testTimedOutMutatingCommandStillLatchesTheGateway() async {
+        let scheduler = DeviceCommandScheduler()
+
+        // A delete that never came back may still be executing on the device.
+        await scheduler.invalidate()
+
+        do {
+            _ = try await scheduler.acquire(priority: .high, generation: nil)
+            XCTFail("An unacknowledged mutating command must still block later commands.")
+        } catch {
+            XCTAssertEqual(error as? DeviceCommandScheduler.AcquireError, .invalidated)
+        }
+    }
+
     func testAFreshScanRecoversTheGatewayAfterAnAcknowledgedCancellation() async throws {
         let scheduler = DeviceCommandScheduler()
         await scheduler.suspendForCancellation()
