@@ -114,6 +114,10 @@ enum MediaTableMetrics {
     static let minimumRowHeight: CGFloat = 24
     static let rowVerticalPadding: CGFloat = 10
 
+    /// Height of a duplicate group's header row. Fixed, and independent of thumbnail size:
+    /// a header carries one line of text whatever the tiles are scaled to.
+    static let groupHeaderHeight: CGFloat = 24
+
     static func rowHeight(thumbnailSide: Double) -> CGFloat {
         max(minimumRowHeight, CGFloat(thumbnailSide) + rowVerticalPadding)
     }

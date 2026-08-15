@@ -366,11 +366,23 @@ final class MediaBrowserViewModel: ObservableObject {
         let scopedIDs = Set(scopedModels.map(\.id))
         let smartSearch = MediaSearchQuery(appliedSearchText)
         let searchedItems = allItems.filter { scopedIDs.contains($0.id) && smartSearch.matches($0.model) }
-        let query = MediaQuery(
-            filters: [],
-            sort: MediaSortDescriptor(field: sortField, order: sortOrder)
-        )
-        let filteredModels = query.apply(to: searchedItems.map(\.model))
+
+        let filteredModels: [DeviceMediaFile]
+        if reviewScope == .duplicates, !duplicateGroups.isEmpty {
+            // Grouping order wins here. Sorting the grouped result by timestamp or name
+            // interleaves the groups again, which is what the user saw: a group's copies
+            // were no longer next to each other, so the pairing was invisible. A group is
+            // only legible as a group when its members are adjacent, and that is the whole
+            // reason Duplicates shows every copy.
+            let surviving = Set(searchedItems.map(\.id))
+            filteredModels = scopedModels.filter { surviving.contains($0.id) }
+        } else {
+            let query = MediaQuery(
+                filters: [],
+                sort: MediaSortDescriptor(field: sortField, order: sortOrder)
+            )
+            filteredModels = query.apply(to: searchedItems.map(\.model))
+        }
         let itemByID = Dictionary(uniqueKeysWithValues: searchedItems.map { ($0.id, $0) })
 
         var items: [MediaItem] = []
@@ -933,6 +945,12 @@ final class MediaBrowserViewModel: ObservableObject {
     }
 
     /// Recomputes the plan from the current rule, for tests that set `allItems` directly.
+    func setSortForTesting(field: MediaSortField, order: DeduperCore.SortOrder) {
+        sortField = field
+        sortOrder = order
+        refreshVisibleOrder()
+    }
+
     func recomputeDuplicatePlanForTesting() {
         duplicatePlan = DuplicatePlanner.plan(
             files: allItems.map(\.model),

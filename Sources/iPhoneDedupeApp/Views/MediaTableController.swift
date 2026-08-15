@@ -92,14 +92,29 @@ final class MediaTableController {
 
     // MARK: - Row helpers
 
+    /// Translates between table rows and media items.
+    ///
+    /// In All Media a row *is* an item, so this is the identity. In Duplicates the table
+    /// also carries group header rows, and then the two differ: row 1 may be the first
+    /// item, row 3 the second. Injecting the mapping keeps every click, arrow key, and
+    /// scroll working off table rows without this type knowing why the rows differ.
+    @MainActor
+    struct RowMapping {
+        var idAtRow: (Int) -> String?
+        var rowForID: (String) -> Int?
+    }
+
+    var rowMapping: RowMapping?
+
     private func id(atRow row: Int) -> String? {
+        if let rowMapping { return rowMapping.idAtRow(row) }
         let ids = viewModel.selection.visibleIDs
-        guard ids.indices.contains(row) else { return nil }
-        return ids[row]
+        return ids.indices.contains(row) ? ids[row] : nil
     }
 
     func row(for id: String) -> Int? {
-        viewModel.selection.index(of: id)
+        if let rowMapping { return rowMapping.rowForID(id) }
+        return viewModel.selection.index(of: id)
     }
 
     /// A plain row click: moves focus and inspector content, never the action selection.

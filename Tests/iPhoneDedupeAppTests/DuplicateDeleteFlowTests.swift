@@ -151,6 +151,49 @@ final class DuplicateDeleteFlowTests: XCTestCase {
         XCTAssertEqual(viewModel.selectedActionIDs, ["keep"])
     }
 
+    /// Reported by the user: in Duplicates the copies of a group were not next to each
+    /// other. Grouping put them in group order, and then the normal sort ran over the
+    /// result and scattered them again — a group is only visible as a group if its members
+    /// are adjacent, so in Duplicates the grouping order wins.
+    func testDuplicatesKeepsGroupMembersAdjacentRegardlessOfSort() {
+        let viewModel = makeViewModel()
+        // Interleaved on purpose, and with timestamps that would separate the pairs if the
+        // normal sort were applied.
+        viewModel.allItems = [
+            item(id: "a1", name: "A.HEIC", timestamp: "2026-01-01T00:00:00.000Z"),
+            item(id: "b1", name: "B.HEIC", timestamp: "2026-01-02T00:00:00.000Z"),
+            item(id: "a2", name: "A.HEIC", timestamp: "2026-01-03T00:00:00.000Z"),
+            item(id: "b2", name: "B.HEIC", timestamp: "2026-01-04T00:00:00.000Z")
+        ]
+        viewModel.recomputeDuplicatePlanForTesting()
+        viewModel.selectReviewScope(.duplicates)
+
+        viewModel.setSortForTesting(field: .timestamp, order: .descending)
+
+        let ids = viewModel.visibleItems.map(\.id)
+        let aPositions = ["a1", "a2"].compactMap { ids.firstIndex(of: $0) }.sorted()
+        let bPositions = ["b1", "b2"].compactMap { ids.firstIndex(of: $0) }.sorted()
+
+        XCTAssertEqual(aPositions.count, 2)
+        XCTAssertEqual(bPositions.count, 2)
+        XCTAssertEqual(aPositions[1] - aPositions[0], 1, "A's copies must be adjacent.")
+        XCTAssertEqual(bPositions[1] - bPositions[0], 1, "B's copies must be adjacent.")
+    }
+
+    /// Sorting still works in All Media, which is where it belongs.
+    func testAllMediaStillSorts() {
+        let viewModel = makeViewModel()
+        viewModel.allItems = [
+            item(id: "old", name: "A.HEIC", timestamp: "2026-01-01T00:00:00.000Z"),
+            item(id: "new", name: "B.HEIC", timestamp: "2026-01-09T00:00:00.000Z")
+        ]
+        viewModel.selectReviewScope(.allMedia)
+
+        viewModel.setSortForTesting(field: .timestamp, order: .descending)
+
+        XCTAssertEqual(viewModel.visibleItems.map(\.id), ["new", "old"])
+    }
+
     // MARK: - Results sheet must not interrupt a clean delete
 
     func testCleanDeleteDoesNotAutoPresentTheResultsSheet() async {
@@ -301,9 +344,25 @@ final class DuplicateDeleteFlowTests: XCTestCase {
         )
     }
 
-    private func item(id: String, name: String) -> MediaBrowserViewModel.MediaItem {
-        MediaBrowserViewModel.MediaItem(
-            model: file(id: id, name: name),
+    private func item(
+        id: String,
+        name: String,
+        timestamp: String? = nil
+    ) -> MediaBrowserViewModel.MediaItem {
+        var model = file(id: id, name: name)
+        if let timestamp {
+            model = DeviceMediaFile(
+                id: model.id,
+                name: model.name,
+                kind: model.kind,
+                size: model.size,
+                timestamp: timestamp,
+                width: model.width,
+                height: model.height
+            )
+        }
+        return MediaBrowserViewModel.MediaItem(
+            model: model,
             token: .fixture(objectHandle: UInt32(abs(id.hashValue % 10_000)), name: name)
         )
     }
