@@ -67,4 +67,66 @@ final class ImportConflictPromptTests: XCTestCase {
         XCTAssertFalse(ImportConflictResolution.keepBoth.isDestructive)
         XCTAssertEqual(ImportConflictResolution.keepBoth.title, "Keep Both")
     }
+
+    /// The preflight must not refuse a batch for a reason the app can now ask about.
+    ///
+    /// Reported on 2026-08-16: the conflict sheet never appeared. The preflight blocked the
+    /// whole import on `filenameCollisions` *before* any download started, so the prompt
+    /// built to resolve that exact situation was unreachable.
+    ///
+    /// An existing filename is a question now, not a failure. Genuine blockers — an
+    /// unwritable folder, a full disk — must still refuse up front, because no per-file
+    /// choice can rescue those.
+    func testAnExistingFilenameNoLongerBlocksTheWholeImport() {
+        let outcome = ImportDestinationPreflight.evaluate(
+            items: [ImportDestinationPreflight.Item(filename: "IMG_0001.HEIC", size: 10)],
+            facts: ImportDestinationPreflight.Facts(
+                isDirectory: true,
+                isLocalVolume: true,
+                isWritable: true,
+                availableCapacity: 10_000,
+                stagingSharesDestinationVolume: true,
+                stagingAvailableCapacity: 10_000,
+                existingFilenames: ["IMG_0001.HEIC"]
+            )
+        )
+
+        guard case .ready = outcome else {
+            return XCTFail("A name conflict is resolved per file, not by refusing, got \(outcome)")
+        }
+    }
+
+    /// Blockers the user cannot answer per file must still stop the batch before anything
+    /// is downloaded.
+    func testRealBlockersStillRefuseUpFront() {
+        let unwritable = ImportDestinationPreflight.evaluate(
+            items: [ImportDestinationPreflight.Item(filename: "A.HEIC", size: 10)],
+            facts: ImportDestinationPreflight.Facts(
+                isDirectory: true,
+                isLocalVolume: true,
+                isWritable: false,
+                availableCapacity: 10_000,
+                stagingSharesDestinationVolume: true,
+                stagingAvailableCapacity: 10_000,
+                existingFilenames: []
+            )
+        )
+        XCTAssertEqual(unwritable, .blocked(.notWritable))
+
+        let full = ImportDestinationPreflight.evaluate(
+            items: [ImportDestinationPreflight.Item(filename: "A.HEIC", size: 10_000)],
+            facts: ImportDestinationPreflight.Facts(
+                isDirectory: true,
+                isLocalVolume: true,
+                isWritable: true,
+                availableCapacity: 5,
+                stagingSharesDestinationVolume: true,
+                stagingAvailableCapacity: 10_000,
+                existingFilenames: []
+            )
+        )
+        guard case .blocked(.insufficientSpace) = full else {
+            return XCTFail("A full disk must still block, got \(full)")
+        }
+    }
 }

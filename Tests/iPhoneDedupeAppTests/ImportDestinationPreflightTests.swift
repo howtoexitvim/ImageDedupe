@@ -101,9 +101,11 @@ final class ImportDestinationPreflightTests: XCTestCase {
         }
     }
 
-    /// The property that must survive: an existing file at the destination still blocks,
-    /// so nothing is ever overwritten.
-    func testAnExistingFileStillBlocksEvenWithinADuplicateGroup() {
+    /// An existing file no longer blocks the batch: the app asks per file instead.
+    ///
+    /// Nothing is overwritten as a result — `DestinationCommitter` publishes with
+    /// `RENAME_EXCL` unless the user chose Replace for that specific conflict.
+    func testAnExistingFileDoesNotBlockADuplicateGroup() {
         let duplicates = [
             ImportDestinationPreflight.Item(filename: "IMG_0001.HEIC", size: 600),
             ImportDestinationPreflight.Item(filename: "IMG_0001.HEIC", size: 600)
@@ -114,7 +116,9 @@ final class ImportDestinationPreflightTests: XCTestCase {
             facts: facts(availableCapacity: 5_000, existingFilenames: ["IMG_0001.HEIC"])
         )
 
-        XCTAssertEqual(result, .blocked(.filenameCollisions(["IMG_0001.HEIC", "IMG_0001.HEIC"])))
+        guard case .ready = result else {
+            return XCTFail("Name conflicts are resolved per file now, got \(result)")
+        }
     }
 
     /// Capacity must count every copy, not one per name, or a large duplicate group could
@@ -135,13 +139,17 @@ final class ImportDestinationPreflightTests: XCTestCase {
         }
     }
 
-    func testExistingFilenameCollisionIsBlocked() {
+    /// An existing filename is admitted so the app can ask about it per file. Refusing here
+    /// made the conflict prompt unreachable in the case it exists for.
+    func testExistingFilenameIsAdmittedForPerFileResolution() {
         let result = ImportDestinationPreflight.evaluate(
             items: items,
             facts: facts(existingFilenames: ["IMG_0002.MOV"])
         )
 
-        XCTAssertEqual(result, .blocked(.filenameCollisions(["IMG_0002.MOV"])))
+        guard case .ready = result else {
+            return XCTFail("Expected the batch to start, got \(result)")
+        }
     }
 
     /// Selecting two files whose names differ only by case is **allowed** to start.
@@ -170,15 +178,17 @@ final class ImportDestinationPreflightTests: XCTestCase {
         }
     }
 
-    /// The case-insensitive check still applies to what is *already* at the destination, so
-    /// an existing `SAME.HEIC` blocks a requested `same.heic`.
-    func testAnExistingFileBlocksACaseInsensitiveMatch() {
+    /// A case-insensitive match against the destination is a conflict to *ask* about, not a
+    /// reason to refuse the batch.
+    func testACaseInsensitiveMatchDoesNotBlockTheBatch() {
         let result = ImportDestinationPreflight.evaluate(
             items: [ImportDestinationPreflight.Item(filename: "same.heic", size: 10)],
             facts: facts(existingFilenames: ["SAME.HEIC"])
         )
 
-        XCTAssertEqual(result, .blocked(.filenameCollisions(["same.heic"])))
+        guard case .ready = result else {
+            return XCTFail("The prompt handles this per file, got \(result)")
+        }
     }
 
     func testInspectAcceptsARealWritableLocalDirectoryAndRemovesItsProbe() throws {
@@ -198,7 +208,9 @@ final class ImportDestinationPreflightTests: XCTestCase {
         XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: directory.path), [])
     }
 
-    func testInspectDetectsARealExistingFile() throws {
+    /// The same against a real folder: an existing file is reported as ready, and resolved
+    /// when that file is reached.
+    func testInspectAdmitsARealExistingFile() throws {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("iphone-dedupe-preflight-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -210,7 +222,9 @@ final class ImportDestinationPreflightTests: XCTestCase {
             items: [ImportDestinationPreflight.Item(filename: "IMG_0001.HEIC", size: 1)]
         )
 
-        XCTAssertEqual(result, .blocked(.filenameCollisions(["IMG_0001.HEIC"])))
+        guard case .ready = result else {
+            return XCTFail("Expected the batch to start, got \(result)")
+        }
     }
 
     private func facts(

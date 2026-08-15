@@ -117,24 +117,17 @@ struct ImportDestinationPreflight {
             ))
         }
 
-        // Only files already at the destination block the batch.
+        // An existing filename is deliberately **not** a blocker any more.
         //
-        // Selecting several copies of one name used to block too, which made a duplicate
-        // group impossible to download — reported on 2026-08-16 as Cmd-A then Download
-        // failing against an empty folder. Duplicates *are* several files sharing a name, so
-        // refusing that refused the one thing a user most wants before deleting a copy.
+        // It used to refuse the whole batch, which made the conflict prompt unreachable in
+        // the case it was built for: a duplicate group shares a name, so the second copy
+        // always meets the first. The app now asks per file — Keep Both, Replace, or Skip —
+        // and `DestinationCommitter` still publishes with `RENAME_EXCL` unless Replace was
+        // chosen, so nothing is overwritten without the user saying so.
         //
-        // Nothing is overwritten as a result: `DestinationCommitter` publishes each file
-        // with an exclusive, no-replace create, so a second copy of a name fails its own
-        // commit and is reported per file rather than blocking the whole batch up front.
-        let existing = Set(facts.existingFilenames.map(normalizedFilename))
-        let collisions = items
-            .filter { existing.contains(normalizedFilename($0.filename)) }
-            .map(\.filename)
-            .sorted()
-        guard collisions.isEmpty else {
-            return .blocked(.filenameCollisions(collisions))
-        }
+        // The checks above stay up front because no per-file choice can rescue them: an
+        // unwritable folder, a non-local volume, or a full disk fails every file equally,
+        // and finding that out after downloading would waste the whole transfer.
 
         return .ready(requiredBytes: requiredBytes, availableBytes: availableCapacity)
     }

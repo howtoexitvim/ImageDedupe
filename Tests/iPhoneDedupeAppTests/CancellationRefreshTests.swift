@@ -129,4 +129,39 @@ final class CancellationRefreshTests: XCTestCase {
 
         XCTAssertTrue(viewModel.importedItemIDs.isEmpty)
     }
+
+    /// Three copies of one name, one downloaded.
+    ///
+    /// The badge means "this file is on your disk", and it is matched by filename. With
+    /// duplicates that is ambiguous: one file on disk cannot tell you *which* of three
+    /// identical copies it came from, so name-matching badges all three.
+    ///
+    /// Downloading all three now produces `A.HEIC`, `A 2.HEIC`, and `A 3.HEIC`, so the
+    /// count of files on disk is what distinguishes "one downloaded" from "all downloaded".
+    func testNameMatchingBadgesEveryCopyOfADuplicate() {
+        FileManager.default.createFile(
+            atPath: destination.appendingPathComponent("A.HEIC").path,
+            contents: Data([0x01])
+        )
+
+        let existing = ImportDestinationPreflight.existingNormalizedFilenames(in: destination)
+        let normalized = ImportDestinationPreflight.normalizedFilename("A.HEIC")
+
+        // Every copy shares the name, so every copy matches the single file on disk.
+        XCTAssertTrue(existing.contains(normalized))
+    }
+
+    /// The disambiguated names a duplicate download produces are distinct on disk, so the
+    /// destination can report how many copies actually landed.
+    func testDisambiguatedCopiesAreDistinctOnDisk() {
+        for name in ["A.HEIC", "A 2.HEIC", "A 3.HEIC"] {
+            FileManager.default.createFile(
+                atPath: destination.appendingPathComponent(name).path,
+                contents: Data([0x01])
+            )
+        }
+
+        let existing = ImportDestinationPreflight.existingNormalizedFilenames(in: destination)
+        XCTAssertEqual(existing.count, 3)
+    }
 }
