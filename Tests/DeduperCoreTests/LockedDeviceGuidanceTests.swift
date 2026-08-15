@@ -77,14 +77,21 @@ final class LockedDeviceGuidanceTests: XCTestCase {
 
     /// The real cause of the long wait reported on 2026-08-16.
     ///
-    /// Bounding the unlock retry did not help, because a locked iPhone is not merely slow to
-    /// open a session — it is **not advertised at all**. `browser.devices` stays empty, no
-    /// session is ever requested, so the retry path is never reached and the scan simply
-    /// waits out its whole 180-second timeout with nothing on screen.
+    /// Bounding the unlock retry did not help. Callback tracing showed why, and corrected an
+    /// earlier guess of mine that the device was simply never advertised:
     ///
-    /// A device that is present and healthy is advertised within a second or two, so waiting
-    /// minutes buys nothing. The scan should give up quickly and let the user retry, which
-    /// is what `RecoveryBanner` already exists to offer.
+    /// ```text
+    /// TRACE didAdd shuqi's iPhone
+    /// TRACE didOpenSession attempt=0 err=-9943 "Please unlock"
+    ///    ...and nothing further, ever
+    /// ```
+    ///
+    /// The device **is** advertised, and `didOpenSessionWithError` fires **exactly once**.
+    /// The gateway then re-requests and the framework never calls back again, so the retry
+    /// counter never advanced and the retry-exhausted branch was unreachable. Counting
+    /// callbacks that never arrive cannot work; only a deadline can end this wait.
+    ///
+    /// The scan gives up and lets the user retry, which is what `RecoveryBanner` exists for.
     func testTheDiscoveryDeadlineEndsTheWaitWithoutCuttingOffARescan() {
         // A rescan was measured at 9.8 s: the previous helper must exit and release the
         // device before a new process is offered it. A 5 s deadline was tried first and

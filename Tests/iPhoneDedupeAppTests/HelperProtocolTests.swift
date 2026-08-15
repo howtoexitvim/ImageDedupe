@@ -197,4 +197,50 @@ final class HelperProtocolTests: XCTestCase {
         }
         XCTAssertTrue(isCancellation)
     }
+
+    // MARK: - Packaging
+
+    /// Both bundle scripts must ship the helper, and sign it before the app that encloses it.
+    ///
+    /// Found on 2026-08-16: `build-debug-app.sh` was updated when the helper was introduced
+    /// and `build-release-candidate.sh` was not, so a release bundle contained only
+    /// `iPhoneDedupeApp`. Every scan in that build would fail, because scanning *is* a helper
+    /// process — and nothing in the test suite would have noticed, since the tests exercise
+    /// the source rather than the packaged bundle.
+    func testBothBundleScriptsShipAndSignTheHelper() throws {
+        let scripts = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("scripts")
+
+        for name in ["build-debug-app.sh", "build-release-candidate.sh"] {
+            let text = try String(
+                contentsOf: scripts.appendingPathComponent(name),
+                encoding: .utf8
+            )
+
+            XCTAssertTrue(
+                text.contains("iPhoneDedupeHelper"),
+                "\(name) must copy the helper, or every scan in that bundle fails."
+            )
+
+            // Nested code has to be signed first: signing the outer bundle seals the
+            // helper's signature, so the reverse order invalidates the app.
+            guard let helperSigning = text.range(of: "codesign")
+                .flatMap({ _ in text.range(of: "MacOS/iPhoneDedupeHelper\"", options: .backwards) })
+            else {
+                return XCTFail("\(name) must sign the helper explicitly.")
+            }
+            let outerSigning = try XCTUnwrap(
+                text.range(of: "\"$app_path\"", options: .backwards),
+                "\(name) must sign the app bundle."
+            )
+            XCTAssertLessThan(
+                helperSigning.lowerBound,
+                outerSigning.lowerBound,
+                "\(name) must sign the helper before the enclosing bundle."
+            )
+        }
+    }
 }
