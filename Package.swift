@@ -6,7 +6,11 @@ import PackageDescription
 let package = Package(
     name: "iphone-dedupe",
     platforms: [
-        .macOS(.v13)
+        // macOS 14 is required for SwiftUI's `.inspector`, which supplies the resizable
+        // trailing pane. Hand-rolling that pane produced three separate layout defects
+        // (clipped leading columns, a collapsed inspector, and a blank pane), so the
+        // platform's own control is worth the raised minimum.
+        .macOS(.v14)
     ],
     targets: [
         .target(

@@ -35,31 +35,31 @@ struct MediaBrowserView: View {
                     max: MediaPane.sidebar.maximumWidth
                 )
         } detail: {
-            // A real `NSSplitView` rather than an `HStack`.
+            VStack(spacing: 0) {
+                mediaContent
+                Divider()
+                statusBar
+            }
+            .frame(minWidth: MediaPaneLayout.minimumCenterWidth, maxHeight: .infinity)
+            // SwiftUI's own inspector, not a hand-rolled split view.
             //
-            // An HStack has no draggable divider — the `Divider()` there was decorative —
-            // and when both children declared a minimum width SwiftUI had to violate one,
-            // which clipped the browser's leading columns. Dropping the inspector's
-            // minimum instead let the center's `maxWidth: .infinity` squeeze the inspector
-            // to nothing. AppKit's split view arbitrates both concerns natively: it honours
-            // each pane's minimum and gives the divider real drag behaviour.
-            MediaDetailSplitView(
-                isInspectorVisible: viewModel.isInspectorVisible,
-                inspectorWidth: paneWidth(.inspector),
-                onInspectorWidthChange: { width in
-                    panePreferences.setWidth(width, for: .inspector)
-                },
-                content: {
-                    VStack(spacing: 0) {
-                        mediaContent
-                        Divider()
-                        statusBar
-                    }
-                },
-                inspector: {
-                    InspectorView(viewModel: viewModel)
-                }
-            )
+            // Three earlier attempts failed here. An `HStack` has only a decorative
+            // divider, and with both children declaring a minimum width SwiftUI clipped
+            // the browser's leading columns. Dropping the inspector's minimum let the
+            // center's infinite maxWidth squeeze it to nothing. Hosting an `NSSplitView`
+            // myself rendered blank, because `NSHostingView`s added as arranged subviews
+            // get neither a frame nor constraints and lay out at zero size.
+            //
+            // `.inspector` is the platform's answer: a real resizable trailing pane with a
+            // draggable divider, whose width AppKit manages.
+            .inspector(isPresented: $viewModel.isInspectorVisible) {
+                InspectorView(viewModel: viewModel)
+                    .inspectorColumnWidth(
+                        min: MediaPane.inspector.minimumWidth,
+                        ideal: paneWidth(.inspector),
+                        max: MediaPane.inspector.maximumWidth
+                    )
+            }
         }
         .navigationSplitViewStyle(.balanced)
         .toolbar { toolbarContent }
