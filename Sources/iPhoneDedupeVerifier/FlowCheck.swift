@@ -45,6 +45,7 @@ enum FlowCheck {
         await downloadCancelThenStillWorks(timeout: timeout, destination: destination)
         await deleteCancelThenStillWorks(timeout: timeout)
         await sequenceStress(timeout: timeout, destination: destination)
+        await downloadWholeDuplicateGroup(timeout: timeout, destination: destination)
 
         if let deleteTarget, confirmedDelete {
             await deleteFlow(timeout: timeout, destination: destination, targetName: deleteTarget)
@@ -239,6 +240,93 @@ enum FlowCheck {
             )) != nil
             check("sequence \(round): preview after cancel+scan", preview)
         }
+    }
+
+    /// Downloading every copy of a duplicate group, which is what Cmd-A then Download does.
+    ///
+    /// The preflight used to refuse a batch containing two files of the same name, which
+    /// made a duplicate group impossible to download even into an empty folder. The commit
+    /// is what prevents overwriting, so the batch must be allowed to start and the second
+    /// copy reported per file.
+    private static func downloadWholeDuplicateGroup(timeout: TimeInterval, destination: URL) async {
+        print("\n-- download an entire duplicate group (the Cmd-A case) --")
+        let session = makeSession()
+        defer { Task { await session.retire() } }
+
+        guard let catalog = try? await session.scan(timeout: .seconds(timeout)) else {
+            check("scan for duplicate group", false)
+            return
+        }
+        let groups = DuplicateGrouping.groups(
+            files: catalog.files.map(\.model),
+            definition: DuplicateRuleSelection.default.definition
+        )
+        guard let group = groups.first(where: { g in
+            g.members.allSatisfy { $0.file.size < 8_000_000 }
+        }) else {
+            check("a duplicate group exists", false, "none small enough")
+            return
+        }
+        check("a duplicate group exists", true, group.title)
+
+        let ids = Set(group.members.map(\.file.id))
+        let tokens = catalog.files.filter { ids.contains($0.model.id) }.map(\.token)
+
+        // The preflight itself lives in the app target; what this can verify on device is
+        // the part that actually moves bytes.
+        let summary = await downloadAll(
+            session: session,
+            tokens: tokens,
+            destination: destination,
+            timeout: timeout
+        )
+        // One copy lands; the rest fail their own commit rather than overwriting it, which
+        // is the per-file report the preflight used to pre-empt.
+        let landed = FileManager.default.fileExists(
+            atPath: destination.appendingPathComponent(group.members[0].file.name).path
+        )
+        check("one copy of the group is on disk", landed)
+        check(
+            "the batch was not refused outright",
+            (summary?.successful.count ?? 0) >= 1,
+            "\(summary?.successful.count ?? 0) ok, \(summary?.failed.count ?? 0) reported per file"
+        )
+    }
+
+    private static func downloadAll(
+        session: DeviceSession,
+        tokens: [DeviceFileToken],
+        destination: URL,
+        timeout: TimeInterval
+    ) async -> DeviceGatewayImportSummary? {
+        let staging = ImportStagingManager.applicationCaches()
+        guard let stagingSession = try? staging.createSession() else { return nil }
+        defer { try? staging.cleanup(stagingSession) }
+
+        guard var summary = try? await session.download(
+            tokens,
+            stagingDirectory: stagingSession.directory,
+            timeout: .seconds(timeout)
+        ) else { return nil }
+
+        let destinationIdentity = try? ImportDestinationIdentity.capture(destination: destination)
+        var committed: [DeviceDownloadSuccess] = []
+        for download in summary.successful {
+            guard let destinationIdentity else { continue }
+            if (try? DestinationCommitter.commit(
+                stagedFilename: download.filename,
+                stagingDirectory: stagingSession.directory,
+                stagingIdentity: stagingSession.identity,
+                stagedIdentity: download.stagedIdentity,
+                filename: download.filename,
+                destination: destination,
+                destinationIdentity: destinationIdentity
+            )) != nil {
+                committed.append(download)
+            }
+        }
+        summary.successful = committed
+        return summary
     }
 
     // MARK: - Delete

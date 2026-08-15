@@ -75,6 +75,66 @@ final class ImportDestinationPreflightTests: XCTestCase {
         XCTAssertEqual(result, .blocked(.insufficientStagingSpace(requiredBytes: 600, availableBytes: 599)))
     }
 
+    /// Selecting a whole duplicate group and pressing Download.
+    ///
+    /// Reported on 2026-08-16: Cmd-A then Download was blocked as a collision even with an
+    /// empty destination. Duplicates are *by definition* several files sharing a name, so
+    /// treating same-named selections as a collision made downloading a duplicate group
+    /// impossible — the one thing the user most wants to do before deleting one.
+    ///
+    /// Two copies of one file are not a reason to refuse the batch: they are the reason it
+    /// exists. The destination still cannot be overwritten, so the safety property that
+    /// matters is untouched.
+    func testDownloadingSeveralCopiesOfOneFileIsAllowed() {
+        let duplicates = [
+            ImportDestinationPreflight.Item(filename: "IMG_0001.HEIC", size: 600),
+            ImportDestinationPreflight.Item(filename: "IMG_0001.HEIC", size: 600)
+        ]
+
+        let result = ImportDestinationPreflight.evaluate(
+            items: duplicates,
+            facts: facts(availableCapacity: 5_000, existingFilenames: [])
+        )
+
+        guard case .ready = result else {
+            return XCTFail("A duplicate group must be downloadable, got \(result)")
+        }
+    }
+
+    /// The property that must survive: an existing file at the destination still blocks,
+    /// so nothing is ever overwritten.
+    func testAnExistingFileStillBlocksEvenWithinADuplicateGroup() {
+        let duplicates = [
+            ImportDestinationPreflight.Item(filename: "IMG_0001.HEIC", size: 600),
+            ImportDestinationPreflight.Item(filename: "IMG_0001.HEIC", size: 600)
+        ]
+
+        let result = ImportDestinationPreflight.evaluate(
+            items: duplicates,
+            facts: facts(availableCapacity: 5_000, existingFilenames: ["IMG_0001.HEIC"])
+        )
+
+        XCTAssertEqual(result, .blocked(.filenameCollisions(["IMG_0001.HEIC", "IMG_0001.HEIC"])))
+    }
+
+    /// Capacity must count every copy, not one per name, or a large duplicate group could
+    /// be admitted onto a disk that cannot hold it.
+    func testCapacityCountsEveryCopyOfADuplicate() {
+        let duplicates = [
+            ImportDestinationPreflight.Item(filename: "IMG_0001.HEIC", size: 600),
+            ImportDestinationPreflight.Item(filename: "IMG_0001.HEIC", size: 600)
+        ]
+
+        let result = ImportDestinationPreflight.evaluate(
+            items: duplicates,
+            facts: facts(availableCapacity: 900, existingFilenames: [])
+        )
+
+        guard case .blocked(.insufficientSpace) = result else {
+            return XCTFail("Both copies must be counted, got \(result)")
+        }
+    }
+
     func testExistingFilenameCollisionIsBlocked() {
         let result = ImportDestinationPreflight.evaluate(
             items: items,
@@ -84,7 +144,17 @@ final class ImportDestinationPreflightTests: XCTestCase {
         XCTAssertEqual(result, .blocked(.filenameCollisions(["IMG_0002.MOV"])))
     }
 
-    func testDuplicateRequestedFilenameIsAlsoACollision() {
+    /// Selecting two files whose names differ only by case is **allowed** to start.
+    ///
+    /// This previously blocked the whole batch, which also blocked every duplicate group —
+    /// the reason Cmd-A then Download failed against an empty folder on 2026-08-16.
+    ///
+    /// Nothing is overwritten as a result. `DestinationCommitter` publishes each file with
+    /// `O_CREAT | O_EXCL`, so the second copy fails its own commit and is reported against
+    /// that file, rather than the batch being refused before anything is downloaded. That is
+    /// also the better report: the user learns which copy landed instead of being told to
+    /// deselect something they cannot identify.
+    func testCaseInsensitiveDuplicateNamesNoLongerBlockTheBatch() {
         let duplicateItems = [
             ImportDestinationPreflight.Item(filename: "same.heic", size: 10),
             ImportDestinationPreflight.Item(filename: "SAME.HEIC", size: 10)
@@ -95,7 +165,20 @@ final class ImportDestinationPreflightTests: XCTestCase {
             facts: facts()
         )
 
-        XCTAssertEqual(result, .blocked(.filenameCollisions(["SAME.HEIC", "same.heic"])))
+        guard case .ready = result else {
+            return XCTFail("A same-named pair must be allowed to start, got \(result)")
+        }
+    }
+
+    /// The case-insensitive check still applies to what is *already* at the destination, so
+    /// an existing `SAME.HEIC` blocks a requested `same.heic`.
+    func testAnExistingFileBlocksACaseInsensitiveMatch() {
+        let result = ImportDestinationPreflight.evaluate(
+            items: [ImportDestinationPreflight.Item(filename: "same.heic", size: 10)],
+            facts: facts(existingFilenames: ["SAME.HEIC"])
+        )
+
+        XCTAssertEqual(result, .blocked(.filenameCollisions(["same.heic"])))
     }
 
     func testInspectAcceptsARealWritableLocalDirectoryAndRemovesItsProbe() throws {

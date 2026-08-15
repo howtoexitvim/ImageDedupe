@@ -117,11 +117,20 @@ struct ImportDestinationPreflight {
             ))
         }
 
+        // Only files already at the destination block the batch.
+        //
+        // Selecting several copies of one name used to block too, which made a duplicate
+        // group impossible to download — reported on 2026-08-16 as Cmd-A then Download
+        // failing against an empty folder. Duplicates *are* several files sharing a name, so
+        // refusing that refused the one thing a user most wants before deleting a copy.
+        //
+        // Nothing is overwritten as a result: `DestinationCommitter` publishes each file
+        // with an exclusive, no-replace create, so a second copy of a name fails its own
+        // commit and is reported per file rather than blocking the whole batch up front.
         let existing = Set(facts.existingFilenames.map(normalizedFilename))
-        let grouped = Dictionary(grouping: items, by: { normalizedFilename($0.filename) })
-        let collisions = grouped
-            .filter { existing.contains($0.key) || $0.value.count > 1 }
-            .flatMap { $0.value.map(\.filename) }
+        let collisions = items
+            .filter { existing.contains(normalizedFilename($0.filename)) }
+            .map(\.filename)
             .sorted()
         guard collisions.isEmpty else {
             return .blocked(.filenameCollisions(collisions))
