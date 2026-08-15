@@ -13,6 +13,16 @@ final class MediaNativeTableView: NSTableView {
 
     override var acceptsFirstResponder: Bool { true }
 
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        setAccessibilityLabel("Media list")
+    }
+
+    required init?(coder: NSCoder) {
+        super.init(coder: coder)
+        setAccessibilityLabel("Media list")
+    }
+
     /// The sidebar's SwiftUI `List` otherwise keeps first responder after launch, which
     /// sends the arrow keys to All Media/Duplicates instead of the media rows.
     override func viewDidMoveToWindow() {

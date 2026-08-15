@@ -50,6 +50,10 @@ final class MediaCheckboxCellView: NSTableCellView {
 
         button.target = self
         button.action = #selector(toggle)
+        // The table itself owns keyboard focus; Space toggles the focused row. Excluding
+        // row checkboxes from Tab order keeps large catalogs navigable with FKA while
+        // preserving each checkbox as a VoiceOver-accessible action.
+        button.refusesFirstResponder = true
         button.translatesAutoresizingMaskIntoConstraints = false
         addSubview(button)
 

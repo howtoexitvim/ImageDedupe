@@ -13,6 +13,16 @@ final class MediaNativeCollectionView: NSCollectionView {
 
     override var acceptsFirstResponder: Bool { true }
 
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        setAccessibilityLabel("Media grid")
+    }
+
+    required init?(coder: NSCoder) {
+        super.init(coder: coder)
+        setAccessibilityLabel("Media grid")
+    }
+
     /// The sidebar's SwiftUI list otherwise keeps first responder, which sends the arrow
     /// keys to All Media/Duplicates instead of the media tiles.
     override func viewDidMoveToWindow() {

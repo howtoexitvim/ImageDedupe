@@ -51,6 +51,11 @@ final class MediaGridItemView: NSCollectionViewItem {
 
         checkbox.target = self
         checkbox.action = #selector(toggleSelection)
+        // Grid navigation belongs to the collection view: arrows move focus and Space
+        // toggles the focused tile. Keeping every visible checkbox out of the Tab chain
+        // prevents Full Keyboard Access from walking thousands of duplicate controls.
+        // The checkbox remains in the accessibility hierarchy for VoiceOver actions.
+        checkbox.refusesFirstResponder = true
         checkbox.translatesAutoresizingMaskIntoConstraints = false
         container.addSubview(checkbox)
 

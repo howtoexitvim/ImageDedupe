@@ -5,6 +5,23 @@ import XCTest
 
 @MainActor
 final class MediaBrowserUITests: XCTestCase {
+    func testMediaSurfacesHaveStableAccessibilityLabels() {
+        XCTAssertEqual(MediaNativeTableView().accessibilityLabel(), "Media list")
+        XCTAssertEqual(MediaNativeCollectionView().accessibilityLabel(), "Media grid")
+    }
+
+    func testSelectionCheckboxesDoNotCreateThousandsOfKeyboardTabStops() {
+        let listCell = MediaCheckboxCellView(identifier: .init("selection"))
+        let gridItem = MediaGridItemView()
+        let gridView = gridItem.view
+
+        let listCheckbox = firstCheckbox(in: listCell)
+        let gridCheckbox = firstCheckbox(in: gridView)
+
+        XCTAssertEqual(listCheckbox?.refusesFirstResponder, true)
+        XCTAssertEqual(gridCheckbox?.refusesFirstResponder, true)
+    }
+
     func testSearchCoordinatorPublishesNativeFieldChanges() {
         var searchText = ""
         let binding = Binding(
@@ -40,5 +57,12 @@ final class MediaBrowserUITests: XCTestCase {
             MediaListLayout.minimumContentWidth,
             Double(MediaTableColumn.totalDefaultWidth)
         )
+    }
+
+    private func firstCheckbox(in view: NSView) -> NSButton? {
+        if let button = view as? NSButton {
+            return button
+        }
+        return view.subviews.lazy.compactMap(firstCheckbox(in:)).first
     }
 }

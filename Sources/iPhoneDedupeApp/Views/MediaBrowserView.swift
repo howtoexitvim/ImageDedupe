@@ -160,13 +160,18 @@ struct MediaBrowserView: View {
                     set: { viewModel.setViewMode($0) }
                 )
             ) {
-                Label("List", systemImage: "list.bullet").tag(MediaBrowserViewModel.ViewMode.list)
-                Label("Grid", systemImage: "square.grid.3x3").tag(MediaBrowserViewModel.ViewMode.grid)
+                Label("List", systemImage: "list.bullet")
+                    .accessibilityLabel("List view")
+                    .tag(MediaBrowserViewModel.ViewMode.list)
+                Label("Grid", systemImage: "square.grid.3x3")
+                    .accessibilityLabel("Grid view")
+                    .tag(MediaBrowserViewModel.ViewMode.grid)
             }
             .pickerStyle(.segmented)
             .labelsHidden()
             .frame(width: 132)
             .help("View mode")
+            .accessibilityLabel("View mode")
         }
 
         ToolbarItem(placement: .principal) {
@@ -267,6 +272,7 @@ struct MediaBrowserView: View {
                     .lineLimit(1)
                     .layoutPriority(1)
                     .help(progress.detail)
+                    .accessibilityLabel("Operation status: \(progress.detail)")
                 Button(progress.isCanceling ? "Canceling…" : "Cancel") {
                     viewModel.cancelCurrentOperation()
                 }
@@ -283,16 +289,22 @@ struct MediaBrowserView: View {
             Spacer()
             Text("\(viewModel.selectedActionIDs.count) selected")
                 .lineLimit(1)
+                .foregroundStyle(.secondary)
+                .accessibilityLabel("Selected items: \(viewModel.selectedActionIDs.count)")
             Text("\(viewModel.filteredItems.count) shown / \(viewModel.allItems.count) total")
                 .lineLimit(1)
+                .foregroundStyle(.secondary)
+                .accessibilityLabel("Shown items: \(viewModel.filteredItems.count) of \(viewModel.allItems.count)")
             Text("Duplicate candidates \(viewModel.duplicatePlan.delete.count)")
                 .lineLimit(1)
+                .foregroundStyle(.secondary)
                 .help("Conservative duplicate candidates under the current name-kind-size rule.")
+                .accessibilityLabel("Duplicate candidates: \(viewModel.duplicatePlan.delete.count)")
         }
         .font(.caption)
-        .foregroundStyle(.secondary)
         .padding(.horizontal, 12)
         .padding(.vertical, 6)
+        .accessibilityElement(children: .contain)
         .confirmationDialog(
             "Delete \(viewModel.selectedActionIDs.count) item(s) from this iPhone?",
             isPresented: $viewModel.isConfirmingDelete,
