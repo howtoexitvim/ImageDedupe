@@ -131,6 +131,8 @@ final class MediaBrowserViewModel: ObservableObject {
     /// One admission gate for every device operation. Replaces the old `isScanning` flag,
     /// which guarded only scan and left import and delete able to overlap each other.
     @Published private(set) var operationState = DeviceOperationState()
+    @Published private(set) var operationProgress: MediaOperationProgress?
+    private var operationCancellation: DeviceOperationCancellation?
 
     /// Kept as a projection so existing views and tests read unchanged.
     var isScanning: Bool { operationState.current == .scanning }
@@ -469,10 +471,22 @@ final class MediaBrowserViewModel: ObservableObject {
             status = "\(operationState.current.verb) already in progress."
             return
         }
+        let cancellation = DeviceOperationCancellation()
+        operationCancellation = cancellation
+        operationProgress = MediaOperationProgress(kind: .importing, totalItems: items.count)
         status = "Importing \(items.count) item(s)..."
         Task.detached(priority: .userInitiated) { [weak self, destination = importDestination] in
             guard let self else { return }
-            let summary = DeviceImportController(timeoutSeconds: 120).importFiles(items.map(\.cameraFile), to: destination)
+            let summary = DeviceImportController(timeoutSeconds: 120).importFiles(
+                items.map(\.cameraFile),
+                to: destination,
+                cancellation: cancellation,
+                onProgress: { update in
+                    Task { @MainActor [weak self] in
+                        self?.applyOperationProgress(update, for: .importing)
+                    }
+                }
+            )
             await self.applyImportSummary(summary, destination: destination, requestedItems: items)
         }
     }
@@ -489,6 +503,9 @@ final class MediaBrowserViewModel: ObservableObject {
             status = "\(operationState.current.verb) already in progress."
             return
         }
+        let cancellation = DeviceOperationCancellation()
+        operationCancellation = cancellation
+        operationProgress = MediaOperationProgress(kind: .deleting, totalItems: items.count)
         status = "Deleting \(items.count) item(s)..."
         Task.detached(priority: .userInitiated) { [weak self] in
             guard let self else { return }
@@ -497,12 +514,32 @@ final class MediaBrowserViewModel: ObservableObject {
                 return
             }
             do {
-                let summary = try DeviceSessionController(timeoutSeconds: 120).delete(items.map(\.cameraFile), from: device, confirmed: true)
+                let summary = try DeviceSessionController(timeoutSeconds: 120).delete(
+                    items.map(\.cameraFile),
+                    from: device,
+                    confirmed: true,
+                    cancellation: cancellation,
+                    onProgress: { update in
+                        Task { @MainActor [weak self] in
+                            self?.applyOperationProgress(update, for: .deleting)
+                        }
+                    }
+                )
                 await self.applyDeleteSummary(summary, requestedIDs: Set(items.map(\.id)))
             } catch {
                 await self.applyDeleteFailure("\(error)")
             }
         }
+    }
+
+    func cancelCurrentOperation() {
+        guard var progress = operationProgress,
+              progress.requestCancellation() else {
+            return
+        }
+        operationProgress = progress
+        status = progress.detail
+        _ = operationCancellation?.cancel()
     }
 
     /// Requests the destructive confirmation sheet. Does not delete anything.
@@ -692,7 +729,9 @@ final class MediaBrowserViewModel: ObservableObject {
             .filter { successfulHandles.contains($0.cameraFile.ptpObjectHandle) }
             .map(\.id)
         importedItemIDs.formUnion(successfulIDs)
-        status = "Imported \(summary.successful.count) item(s), \(summary.failed.count) failed."
+        status = "Imported \(summary.successful.count) item(s), \(summary.failed.count) failed, \(summary.canceled.count) canceled."
+        operationProgress = nil
+        operationCancellation = nil
         operationState.finish()
     }
 
@@ -704,6 +743,8 @@ final class MediaBrowserViewModel: ObservableObject {
         duplicatePlan = DuplicatePlanner.plan(files: allItems.map(\.model), rule: .nameKindSize)
         refreshVisibleOrder()
         status = "Deleted \(summary.successful.count) item(s), \(summary.failed.count) failed, \(summary.canceled.count) canceled."
+        operationProgress = nil
+        operationCancellation = nil
         operationState.finish()
     }
 
@@ -711,7 +752,22 @@ final class MediaBrowserViewModel: ObservableObject {
         let advice = DeviceRecoveryAdvice.forFailure(message)
         recoveryAdvice = advice
         status = "Delete failed: \(advice.title)"
+        operationProgress = nil
+        operationCancellation = nil
         operationState.fail()
+    }
+
+    private func applyOperationProgress(
+        _ update: DeviceBatchProgress,
+        for operation: DeviceOperationState.Operation
+    ) {
+        guard operationState.current == operation,
+              var progress = operationProgress else {
+            return
+        }
+        progress.apply(update)
+        operationProgress = progress
+        status = progress.detail
     }
 
     private func trimMetadataCacheIfNeeded() {

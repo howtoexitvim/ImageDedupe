@@ -73,18 +73,40 @@ public final class DeviceSessionController: NSObject, ICDeviceBrowserDelegate, I
         return DeviceScanResult(deviceName: device.name ?? "unknown", device: device, files: mapped)
     }
 
-    public func delete(_ files: [ICCameraFile], from device: ICCameraDevice, confirmed: Bool) throws -> DeviceDeleteSummary {
+    public func delete(
+        _ files: [ICCameraFile],
+        from device: ICCameraDevice,
+        confirmed: Bool,
+        cancellation: DeviceOperationCancellation? = nil,
+        onProgress: (@Sendable (DeviceBatchProgress) -> Void)? = nil
+    ) throws -> DeviceDeleteSummary {
         guard confirmed else {
             throw DeviceMediaError.deleteNotConfirmed
         }
+        guard cancellation?.isCancellationRequested != true else {
+            return DeviceDeleteSummary(successful: [], failed: [], canceled: files, error: nil)
+        }
+        let total = files.count
+        onProgress?(DeviceBatchProgress(
+            completedItems: 0,
+            totalItems: total,
+            currentFilename: nil,
+            fractionCompleted: total == 0 ? 1 : 0
+        ))
         guard #available(macOS 10.15, *) else {
             device.requestDeleteFiles(files)
+            onProgress?(DeviceBatchProgress(
+                completedItems: total,
+                totalItems: total,
+                currentFilename: nil,
+                fractionCompleted: 1
+            ))
             return DeviceDeleteSummary(successful: files, failed: [], canceled: [], error: nil)
         }
 
         var done = false
         var summary = DeviceDeleteSummary(successful: [], failed: [], canceled: [], error: nil)
-        _ = device.requestDeleteFiles(files, deleteFailed: { failures in
+        let systemProgress = device.requestDeleteFiles(files, deleteFailed: { failures in
             summary.failed.append(contentsOf: failures.values.compactMap { $0 as? ICCameraFile })
         }, completion: { result, error in
             let successful = result[.successful] ?? []
@@ -96,15 +118,40 @@ public final class DeviceSessionController: NSObject, ICDeviceBrowserDelegate, I
             summary.error = error
             done = true
         })
+        cancellation?.bind(systemProgress)
+        defer { cancellation?.unbind(systemProgress) }
 
         let deadline = Date().addingTimeInterval(timeoutSeconds)
+        var didForwardCancellation = false
         while !done && Date() < deadline {
             RunLoop.current.run(mode: .default, before: Date().addingTimeInterval(0.1))
+            let fraction = systemProgress?.fractionCompleted ?? 0
+            onProgress?(DeviceBatchProgress(
+                completedItems: Int((fraction * Double(total)).rounded(.down)),
+                totalItems: total,
+                currentFilename: nil,
+                fractionCompleted: fraction
+            ))
+
+            if cancellation?.isCancellationRequested == true, !didForwardCancellation {
+                didForwardCancellation = true
+                systemProgress?.cancel()
+                device.cancelDelete()
+            }
         }
 
         guard done else {
+            if cancellation?.isCancellationRequested == true {
+                return DeviceDeleteSummary(successful: [], failed: [], canceled: files, error: nil)
+            }
             throw DeviceMediaError.timeout("Timed out waiting for delete completion.")
         }
+        onProgress?(DeviceBatchProgress(
+            completedItems: total,
+            totalItems: total,
+            currentFilename: nil,
+            fractionCompleted: 1
+        ))
         return summary
     }
 

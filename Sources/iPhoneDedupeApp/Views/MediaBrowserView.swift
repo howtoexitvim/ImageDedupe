@@ -221,7 +221,7 @@ struct MediaBrowserView: View {
             Button("Import") {
                 viewModel.importSelected()
             }
-            .disabled(viewModel.selectedActionIDs.isEmpty)
+            .disabled(viewModel.selectedActionIDs.isEmpty || viewModel.isDeviceBusy)
 
             Button {
                 viewModel.revealLastImportInFinder()
@@ -235,15 +235,32 @@ struct MediaBrowserView: View {
             Button("Delete") {
                 viewModel.requestDeleteConfirmation()
             }
-            .disabled(viewModel.selectedActionIDs.isEmpty)
+            .disabled(viewModel.selectedActionIDs.isEmpty || viewModel.isDeviceBusy)
 
             Divider().frame(height: 16)
 
-            Text(viewModel.status)
-                .lineLimit(1)
-                .layoutPriority(1)
-                .help(viewModel.status)
-                .accessibilityLabel("Status: \(viewModel.status)")
+            if let progress = viewModel.operationProgress {
+                ProgressView(value: progress.fractionCompleted)
+                    .frame(width: 96)
+                    .accessibilityLabel(progress.kind == .importing ? "Import progress" : "Delete progress")
+                    .accessibilityValue("\(progress.completedItems) of \(progress.totalItems)")
+                Text(progress.detail)
+                    .lineLimit(1)
+                    .layoutPriority(1)
+                    .help(progress.detail)
+                Button(progress.isCanceling ? "Canceling…" : "Cancel") {
+                    viewModel.cancelCurrentOperation()
+                }
+                .controlSize(.small)
+                .disabled(!progress.canCancel)
+                .accessibilityHint("Stops after the device acknowledges cancellation")
+            } else {
+                Text(viewModel.status)
+                    .lineLimit(1)
+                    .layoutPriority(1)
+                    .help(viewModel.status)
+                    .accessibilityLabel("Status: \(viewModel.status)")
+            }
             Spacer()
             Text("\(viewModel.selectedActionIDs.count) selected")
                 .lineLimit(1)
