@@ -155,7 +155,7 @@ final class MediaGridInteractionTests: XCTestCase {
                 width: nil,
                 height: nil
             ),
-            cameraFile: ICCameraFile()
+            token: .fixture()
         )
     }
 
@@ -215,6 +215,16 @@ final class MediaGridInteractionTests: XCTestCase {
         viewModel.moveFocus(rows: 0, columns: 1, columnCount: 3, extendingSelection: false)
 
         XCTAssertTrue(viewModel.selectedActionIDs.isEmpty)
+    }
+
+    func testContextMenuUsesDownloadForTheTransferAction() {
+        let viewModel = viewModel(["a"])
+        let coordinator = MediaCollectionView.Coordinator(viewModel: viewModel)
+        coordinator.apply(items: viewModel.filteredItems)
+
+        let titles = coordinator.contextMenu(forIndex: 0)?.items.map(\.title)
+
+        XCTAssertEqual(titles, ["Select", "", "Download “a.heic”", "Delete “a.heic”"])
     }
 
     // MARK: - Shift extension (the chosen multi-select gesture)

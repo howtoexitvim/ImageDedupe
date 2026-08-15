@@ -24,7 +24,7 @@ final class CatalogSnapshotTests: XCTestCase {
                     height: 3_024,
                     duration: index.isMultiple(of: 3) ? Double(index % 120) : nil
                 ),
-                cameraFile: ICCameraFile()
+                token: .fixture()
             )
         }
     }
@@ -75,6 +75,50 @@ final class CatalogSnapshotTests: XCTestCase {
         viewModel.refreshVisibleOrder()
 
         XCTAssertEqual(viewModel.visibleItems.count, 4)
+    }
+
+    func testSuccessfulDeletionClearsOnlySuccessfulImportedItems() {
+        let viewModel = viewModel(count: 3)
+        viewModel.importedItemIDs = ["id-0", "id-1", "id-2"]
+
+        viewModel.applySuccessfulDeletion(itemIDs: ["id-0", "id-2"])
+
+        XCTAssertEqual(viewModel.allItems.map(\.id), ["id-1"])
+        XCTAssertEqual(viewModel.importedItemIDs, ["id-1"])
+    }
+
+    func testMissingLocalDownloadClearsBadgeWithoutRemovingDeviceItem() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("iphone-dedupe-imported-badge-\(UUID().uuidString)", isDirectory: true)
+        let downloadedFile = directory.appendingPathComponent("IMG_0000.HEIC")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        try Data("downloaded".utf8).write(to: downloadedFile)
+        let viewModel = viewModel(count: 1)
+        viewModel.recordSuccessfulDownload(itemID: "id-0", fileURL: downloadedFile)
+        viewModel.status = "Imported 1 item(s), 0 failed, 0 canceled."
+        viewModel.reconcileImportedDownloads()
+        XCTAssertEqual(viewModel.importedItemIDs, ["id-0"])
+
+        try FileManager.default.removeItem(at: downloadedFile)
+        viewModel.reconcileImportedDownloads()
+
+        XCTAssertTrue(viewModel.importedItemIDs.isEmpty)
+        XCTAssertEqual(viewModel.allItems.map(\.id), ["id-0"])
+        XCTAssertEqual(viewModel.status, "Downloaded 0 item(s) remain locally.")
+    }
+
+    func testLocalDownloadReconciliationDoesNotReplaceActiveOperationStatus() {
+        let viewModel = viewModel(count: 1)
+        let missingFile = FileManager.default.temporaryDirectory
+            .appendingPathComponent("iphone-dedupe-missing-\(UUID().uuidString).HEIC")
+        viewModel.recordSuccessfulDownload(itemID: "id-0", fileURL: missingFile)
+        XCTAssertTrue(viewModel.beginOperationForTesting(.importing))
+        viewModel.status = "Importing 1 item(s)..."
+
+        viewModel.reconcileImportedDownloads()
+
+        XCTAssertEqual(viewModel.status, "Importing 1 item(s)...")
     }
 
     func testEmptyCatalogProducesAnEmptySnapshot() {

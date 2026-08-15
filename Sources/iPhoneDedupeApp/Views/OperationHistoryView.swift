@@ -3,6 +3,7 @@ import SwiftUI
 struct OperationHistoryView: View {
     let records: [OperationResultRecord]
     let warning: String?
+    let onRetryVerification: (UUID) -> Void
     let onClear: () -> Void
     let onDone: () -> Void
 
@@ -48,7 +49,39 @@ struct OperationHistoryView: View {
                             LabeledContent("Destination", value: destinationPath)
                         }
 
-                        ForEach(record.failures) { failure in
+                        if let audit = record.deleteAudit {
+                            LabeledContent(
+                                "Verification",
+                                value: audit.verificationState == .verified ? "Verified" : "Pending"
+                            )
+                            LabeledContent(
+                                "Planned size",
+                                value: ByteCountFormatter.string(
+                                    fromByteCount: audit.snapshot.totalBytes,
+                                    countStyle: .file
+                                )
+                            )
+                            ForEach(audit.items) { item in
+                                VStack(alignment: .leading, spacing: 3) {
+                                    Label(item.filename, systemImage: icon(for: item.outcome))
+                                    Text(item.outcome.title)
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                    if let reason = item.reason {
+                                        Text(reason)
+                                            .font(.caption)
+                                            .foregroundStyle(.secondary)
+                                    }
+                                }
+                                .accessibilityElement(children: .combine)
+                            }
+                            if audit.verificationState == .pending {
+                                Button("Retry Verification") {
+                                    onRetryVerification(record.id)
+                                }
+                            }
+                        } else {
+                            ForEach(record.failures) { failure in
                             VStack(alignment: .leading, spacing: 3) {
                                 Label(failure.filename, systemImage: "xmark.circle")
                                 Text(failure.reason)
@@ -56,10 +89,11 @@ struct OperationHistoryView: View {
                                     .foregroundStyle(.secondary)
                             }
                             .accessibilityElement(children: .combine)
-                        }
+                            }
 
-                        ForEach(Array(record.canceledFilenames.enumerated()), id: \.offset) { _, filename in
-                            Label("\(filename) — Canceled", systemImage: "stop.circle")
+                            ForEach(Array(record.canceledFilenames.enumerated()), id: \.offset) { _, filename in
+                                Label("\(filename) — Canceled", systemImage: "stop.circle")
+                            }
                         }
                     } header: {
                         HStack {
@@ -73,14 +107,23 @@ struct OperationHistoryView: View {
         }
         .frame(minWidth: 620, minHeight: 420)
         .confirmationDialog(
-            "Clear all saved operation results?",
+            "Clear resolved operation results?",
             isPresented: $isConfirmingClear,
             titleVisibility: .visible
         ) {
-            Button("Clear Results", role: .destructive, action: onClear)
+            Button("Clear Resolved Results", role: .destructive, action: onClear)
             Button("Cancel", role: .cancel) {}
         } message: {
-            Text("This removes the saved failure and cancellation history from this Mac.")
+            Text("This removes resolved failure and cancellation history from this Mac. Pending delete verification audits are retained for safety.")
+        }
+    }
+
+    private func icon(for outcome: DeleteAudit.Item.Outcome) -> String {
+        switch outcome {
+        case .confirmedRemoved: "checkmark.circle"
+        case .stillPresent, .frameworkFailed: "xmark.circle"
+        case .canceled: "stop.circle"
+        case .ambiguous, .verificationPending: "questionmark.circle"
         }
     }
 }

@@ -57,6 +57,7 @@ enum MediaScrollGeometry {
     /// `bounds.maxY` — as this code originally did — flips it a second time and reverses
     /// the scroll direction. Reading `isFlipped` keeps this correct for either kind of
     /// view rather than assuming one.
+    @MainActor
     static func pointerDepth(of pointInWindow: NSPoint, in clipView: NSView) -> CGFloat {
         let pointInClip = clipView.convert(pointInWindow, from: nil)
         return clipView.isFlipped

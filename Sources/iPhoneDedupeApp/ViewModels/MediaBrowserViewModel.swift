@@ -2,18 +2,18 @@ import AppKit
 import DeduperCore
 import DeviceMediaKit
 import Foundation
-import ImageCaptureCore
 
 @MainActor
 final class MediaBrowserViewModel: ObservableObject {
-    struct MediaItem: Identifiable, @unchecked Sendable {
+    struct MediaItem: Identifiable, Sendable {
         let model: DeviceMediaFile
-        let cameraFile: ICCameraFile
+        let token: DeviceFileToken
         var id: String { model.id }
     }
 
-    private struct ScanPayload: @unchecked Sendable {
+    private struct ScanPayload: Sendable {
         let deviceName: String
+        let deviceIdentityHash: String?
         let items: [MediaItem]
         let plan: DuplicatePlan
     }
@@ -26,6 +26,7 @@ final class MediaBrowserViewModel: ObservableObject {
     }
 
     @Published var deviceName = "No Device"
+    private var deviceIdentityHash: String?
     /// `didSet` rather than bumping at each call site, so a future mutation cannot forget
     /// to invalidate the derived catalog and silently serve a stale snapshot.
     @Published var allItems: [MediaItem] = [] {
@@ -55,6 +56,7 @@ final class MediaBrowserViewModel: ObservableObject {
     /// Set when a renderer asks for the destructive confirmation sheet. The delete itself
     /// still only runs from the confirmed action, never from this flag.
     @Published var isConfirmingDelete = false
+    @Published private(set) var pendingDeleteSnapshot: DeletePlanSnapshot?
 
     /// Actionable guidance for the most recent device failure, or `nil` when the last
     /// operation succeeded. Drives the recovery banner.
@@ -65,16 +67,50 @@ final class MediaBrowserViewModel: ObservableObject {
     @Published var isShowingOperationHistory = false
     private let operationResultStore: OperationResultStore
     typealias ImportPreflight = (URL, [ImportDestinationPreflight.Item]) -> ImportDestinationPreflight.Outcome
+    typealias InspectorPreviewRequest = (
+        DeviceFileToken,
+        Int,
+        @escaping @Sendable (NSImage?) -> Void
+    ) -> Void
+    private let gateway: ImageCaptureDeviceGateway
+    private let stagingManager: ImportStagingManager
     private let importPreflight: ImportPreflight
+    private let inspectorPreviewRequest: InspectorPreviewRequest
+    private let inspectorPreviewTimeout: Duration
 
     init(
         operationResultStore: OperationResultStore = .applicationSupport(),
+        gateway: ImageCaptureDeviceGateway? = nil,
+        stagingManager: ImportStagingManager = .applicationCaches(),
         importPreflight: @escaping ImportPreflight = { destination, items in
             ImportDestinationPreflight.inspect(destination: destination, items: items)
-        }
+        },
+        inspectorPreviewTimeout: Duration = .seconds(12),
+        inspectorPreviewRequest: InspectorPreviewRequest? = nil
     ) {
+        let resolvedGateway = gateway ?? ImageCaptureDeviceGateway()
+        self.gateway = resolvedGateway
+        self.stagingManager = stagingManager
         self.operationResultStore = operationResultStore
         self.importPreflight = importPreflight
+        self.inspectorPreviewTimeout = inspectorPreviewTimeout
+        self.inspectorPreviewRequest = inspectorPreviewRequest ?? { token, maxPixelSize, completion in
+            Task { @MainActor in
+                let image: NSImage?
+                do {
+                    let data = try await resolvedGateway.thumbnailData(
+                        for: token,
+                        maxPixelSize: maxPixelSize,
+                        timeout: .seconds(12)
+                    )
+                    image = InspectorPreviewProvider.decode(data, maxPixelSize: maxPixelSize)
+                } catch {
+                    image = nil
+                }
+                completion(image)
+            }
+        }
+        try? stagingManager.cleanupStaleSessions()
         let loaded = operationResultStore.load()
         operationHistory = loaded.records
         operationHistoryWarning = loaded.warning
@@ -172,7 +208,9 @@ final class MediaBrowserViewModel: ObservableObject {
     }
     @Published var thumbnailCache: [String: NSImage] = [:]
     @Published var metadataCache: [String: MediaMetadataSummary] = [:]
+    @Published private(set) var inspectorPreviewCache: [String: NSImage] = [:]
     @Published var importedItemIDs: Set<String> = []
+    private var importedFileURLsByItemID: [String: URL] = [:]
     @Published var duplicatePlan = DuplicatePlan(keep: [], delete: []) {
         didSet { catalogVersion &+= 1 }
     }
@@ -195,6 +233,17 @@ final class MediaBrowserViewModel: ObservableObject {
     private var thumbnailCostByID: [String: Int] = [:]
     private var metadataAccessOrder: [String] = []
     private let maxCachedMetadataSummaries = 768
+
+    private static let inspectorPreviewCountLimit = 8
+    private static let inspectorPreviewCostLimit = 96 * 1_024 * 1_024
+    private var inspectorPreviewAccessOrder: [String] = []
+    private var inspectorPreviewCostByID: [String: Int] = [:]
+    private var inspectorPreviewTotalCost = 0
+    private var inspectorPreviewSelectedID: String?
+    private var inspectorPreviewDesiredItem: MediaItem?
+    private var inspectorPreviewFailedSelectionID: String?
+    private var inspectorPreviewActive: (token: UUID, item: MediaItem, generation: Int)?
+    private var inspectorPreviewTimeoutTask: Task<Void, Never>?
 
     /// Publishes the current filtered order into the selection model so focus, anchor,
     /// and action selection are reconciled exactly once per state change instead of
@@ -324,9 +373,14 @@ final class MediaBrowserViewModel: ObservableObject {
                 return
             }
             do {
-                let payload = try await Task.detached(priority: .userInitiated) {
-                    try Self.scanDevice(timeoutSeconds: 180)
-                }.value
+                let snapshot = try await self.gateway.scan(timeout: .seconds(180))
+                let items = snapshot.files.map { MediaItem(model: $0.model, token: $0.token) }
+                let payload = ScanPayload(
+                    deviceName: snapshot.deviceName,
+                    deviceIdentityHash: snapshot.deviceIdentityHash,
+                    items: items,
+                    plan: DuplicatePlanner.plan(files: items.map(\.model), rule: .nameKindSize)
+                )
                 // A newer scan may have started while this one was running.
                 guard self.operationState.isCurrent(generation: generation) else { return }
                 self.applyScanPayload(payload)
@@ -496,6 +550,13 @@ final class MediaBrowserViewModel: ObservableObject {
             status = "Import blocked: \(failure.message)"
             return
         }
+        let destinationIdentity: ImportDestinationIdentity
+        do {
+            destinationIdentity = try ImportDestinationIdentity.capture(destination: importDestination)
+        } catch {
+            status = "Import blocked: \(error.localizedDescription)"
+            return
+        }
         // Previously unguarded: a second Import, or an Import during a Delete, would both
         // reach the device concurrently.
         guard operationState.begin(.importing) else {
@@ -503,62 +564,116 @@ final class MediaBrowserViewModel: ObservableObject {
             return
         }
         let cancellation = DeviceOperationCancellation()
+        let stagingSession: ImportStagingSession
+        do {
+            stagingSession = try stagingManager.createSession()
+        } catch {
+            operationState.fail()
+            status = "Import blocked: private staging could not be created. \(error.localizedDescription)"
+            return
+        }
         operationCancellation = cancellation
         operationProgress = MediaOperationProgress(kind: .importing, totalItems: items.count)
         status = "Importing \(items.count) item(s)..."
-        Task.detached(priority: .userInitiated) { [weak self, destination = importDestination] in
+        Task { [weak self, destination = importDestination, stagingManager] in
+            defer { try? stagingManager.cleanup(stagingSession) }
             guard let self else { return }
-            let summary = DeviceImportController(timeoutSeconds: 120).importFiles(
-                items.map(\.cameraFile),
-                to: destination,
+            var summary = await self.gateway.download(
+                items.map(\.token),
+                to: stagingSession,
                 cancellation: cancellation,
                 onProgress: { update in
-                    Task { @MainActor [weak self] in
-                        self?.applyOperationProgress(update, for: .importing)
-                    }
+                    self.applyOperationProgress(update, for: .importing)
                 }
             )
-            await self.applyImportSummary(summary, destination: destination, requestedItems: items)
+            let itemByToken = Dictionary(uniqueKeysWithValues: items.map { ($0.token, $0) })
+            var committed: [DeviceDownloadSuccess] = []
+            for download in summary.successful {
+                let targetName = itemByToken[download.token]?.model.name ?? download.filename
+                do {
+                    let output = try DestinationCommitter.commit(
+                        stagedFilename: download.filename,
+                        stagingDirectory: stagingSession.directory,
+                        stagingIdentity: stagingSession.identity,
+                        stagedIdentity: download.stagedIdentity,
+                        filename: targetName,
+                        destination: destination,
+                        destinationIdentity: destinationIdentity
+                    )
+                    committed.append(DeviceDownloadSuccess(
+                        token: download.token,
+                        filename: output.lastPathComponent,
+                        stagedIdentity: download.stagedIdentity
+                    ))
+                } catch {
+                    summary.failed.append(DeviceOperationFailure(
+                        token: download.token,
+                        filename: targetName,
+                        reason: error.localizedDescription
+                    ))
+                }
+            }
+            summary.successful = committed
+            self.applyImportSummary(summary, destination: destination, requestedItems: items)
         }
     }
 
     func deleteSelected() {
-        let items = selectedActionItems
-        guard !items.isEmpty else {
+        guard !operationState.isBusy else {
+            status = "\(operationState.current.verb) already in progress."
+            return
+        }
+        guard let snapshot = pendingDeleteSnapshot, !snapshot.items.isEmpty else {
             status = "Select one or more items to delete."
             return
         }
+        let currentGeneration = allItems.first?.token.generation
+        guard snapshot.catalogGeneration == currentGeneration else {
+            pendingDeleteSnapshot = nil
+            status = "Delete selection expired after the catalog changed. Review and confirm again."
+            return
+        }
+        pendingDeleteSnapshot = nil
         // Destructive and previously unguarded, so a double-click on the confirmation
         // could submit the same delete twice.
         guard operationState.begin(.deleting) else {
             status = "\(operationState.current.verb) already in progress."
             return
         }
+        let pendingAudit = DeleteReconciler.unverified(
+            snapshot: snapshot,
+            reason: "Delete confirmation saved; device verification has not completed."
+        )
+        guard persistRequiredDeleteRecord(makeDeleteRecord(audit: pendingAudit)) else {
+            operationState.fail()
+            status = "Delete blocked: the required local audit could not be saved."
+            return
+        }
         let cancellation = DeviceOperationCancellation()
         operationCancellation = cancellation
-        operationProgress = MediaOperationProgress(kind: .deleting, totalItems: items.count)
-        status = "Deleting \(items.count) item(s)..."
-        Task.detached(priority: .userInitiated) { [weak self] in
+        operationProgress = MediaOperationProgress(kind: .deleting, totalItems: snapshot.items.count)
+        status = "Deleting \(snapshot.items.count) item(s)..."
+        Task { [weak self] in
             guard let self else { return }
-            guard let device = items.first?.cameraFile.device else {
-                await self.applyDeleteFailure("No device available for selected files.")
-                return
-            }
             do {
-                let summary = try DeviceSessionController(timeoutSeconds: 120).delete(
-                    items.map(\.cameraFile),
-                    from: device,
+                let summary = try await self.gateway.delete(
+                    snapshot.items.map(\.token),
                     confirmed: true,
                     cancellation: cancellation,
                     onProgress: { update in
-                        Task { @MainActor [weak self] in
-                            self?.applyOperationProgress(update, for: .deleting)
-                        }
+                        self.applyOperationProgress(update, for: .deleting)
                     }
                 )
-                await self.applyDeleteSummary(summary, requestedItems: items)
+                await self.verifyDelete(snapshot: snapshot, summary: summary)
             } catch {
-                await self.applyDeleteFailure("\(error)")
+                let summary = DeviceGatewayDeleteSummary(failed: snapshot.items.map {
+                    DeviceOperationFailure(
+                        token: $0.token,
+                        filename: $0.filename,
+                        reason: error.localizedDescription
+                    )
+                })
+                await self.verifyDelete(snapshot: snapshot, summary: summary)
             }
         }
     }
@@ -580,20 +695,55 @@ final class MediaBrowserViewModel: ObservableObject {
     func clearOperationHistory() {
         do {
             try operationResultStore.clear()
-            operationHistory = []
-            operationHistoryWarning = nil
+            let loaded = operationResultStore.load()
+            operationHistory = loaded.records
+            operationHistoryWarning = loaded.records.contains(where: \.isPendingDeleteAudit)
+                ? "Pending delete verification records are retained until verification completes."
+                : loaded.warning
         } catch {
             operationHistoryWarning = "Saved operation results could not be cleared: \(error.localizedDescription)"
         }
     }
 
+    func retryDeleteVerification(recordID: UUID) {
+        guard !operationState.isBusy,
+              let audit = operationHistory.first(where: { $0.id == recordID })?.deleteAudit,
+              audit.verificationState == .pending,
+              operationState.begin(.scanning) else {
+            return
+        }
+        status = "Verifying the saved delete audit…"
+        Task { [weak self] in
+            guard let self else { return }
+            let summary = audit.frameworkSummary ?? DeviceGatewayDeleteSummary()
+            await self.verifyDelete(snapshot: audit.snapshot, summary: summary)
+        }
+    }
+
     /// Requests the destructive confirmation sheet. Does not delete anything.
     func requestDeleteConfirmation() {
-        guard !selectedActionIDs.isEmpty else {
+        let items = selectedActionItems
+        guard !items.isEmpty else {
             status = "Select one or more items to delete."
             return
         }
+        pendingDeleteSnapshot = DeletePlanSnapshot(
+            deviceName: deviceName,
+            deviceIdentityHash: deviceIdentityHash,
+            items: items.map {
+                DeletePlanSnapshot.Item(
+                    token: $0.token,
+                    filename: $0.model.name,
+                    kind: $0.model.kind,
+                    size: $0.model.size
+                )
+            }
+        )
         isConfirmingDelete = true
+    }
+
+    func cancelDeleteConfirmation() {
+        pendingDeleteSnapshot = nil
     }
 
     func revealLastImportInFinder() {
@@ -622,23 +772,27 @@ final class MediaBrowserViewModel: ObservableObject {
         }
         let generation = operationState.generation
 
-        Task.detached(priority: .utility) { [weak self] in
+        Task { [weak self] in
             guard let self else {
                 return
             }
             var loaded: [(id: String, image: NSImage)] = []
             for item in missing {
-                guard let image = ThumbnailProvider.thumbnail(for: item.cameraFile, timeoutSeconds: 6) else {
+                guard let data = try? await self.gateway.thumbnailData(
+                    for: item.token,
+                    maxPixelSize: 512,
+                    timeout: .seconds(6)
+                ), let image = InspectorPreviewProvider.decode(data, maxPixelSize: 512) else {
                     continue
                 }
                 loaded.append((id: item.id, image: image))
             }
             guard !loaded.isEmpty else {
-                await self.finishThumbnailRequests(ids: missing.map(\.id), generation: generation)
+                self.finishThumbnailRequests(ids: missing.map(\.id), generation: generation)
                 return
             }
             try? await Task.sleep(nanoseconds: 250_000_000)
-            await self.cacheThumbnails(loaded, completedIDs: missing.map(\.id), generation: generation)
+            self.cacheThumbnails(loaded, completedIDs: missing.map(\.id), generation: generation)
         }
     }
 
@@ -655,27 +809,157 @@ final class MediaBrowserViewModel: ObservableObject {
         loadMetadata(for: item)
     }
 
-    nonisolated private static func scanDevice(timeoutSeconds: TimeInterval) throws -> ScanPayload {
-        let result = try DeviceSessionController(timeoutSeconds: timeoutSeconds).scan()
-        let items = result.files.map { MediaItem(model: $0.model, cameraFile: $0.cameraFile) }
-        let plan = DuplicatePlanner.plan(files: items.map(\.model), rule: .nameKindSize)
-        return ScanPayload(deviceName: result.deviceName, items: items, plan: plan)
+    func loadInspectorPreview(for item: MediaItem) {
+        let selectionChanged = inspectorPreviewSelectedID != item.id
+        inspectorPreviewSelectedID = item.id
+        inspectorPreviewDesiredItem = item
+        if selectionChanged {
+            inspectorPreviewFailedSelectionID = nil
+        }
+
+        if inspectorPreviewCache[item.id] != nil {
+            touchInspectorPreview(item.id)
+            inspectorPreviewDesiredItem = nil
+            return
+        }
+        startDesiredInspectorPreviewIfPossible()
     }
 
-    private func applyScanPayload(_ payload: ScanPayload) {
+    func clearInspectorPreviewSelection() {
+        inspectorPreviewSelectedID = nil
+        inspectorPreviewDesiredItem = nil
+        inspectorPreviewFailedSelectionID = nil
+    }
+
+    func inspectorPreviewImage(for item: MediaItem) -> NSImage? {
+        inspectorPreviewCache[item.id] ?? thumbnailCache[item.id]
+    }
+
+    private func startDesiredInspectorPreviewIfPossible() {
+        guard inspectorPreviewActive == nil,
+              let item = inspectorPreviewDesiredItem,
+              inspectorPreviewCache[item.id] == nil,
+              inspectorPreviewFailedSelectionID != item.id else {
+            return
+        }
+
+        let generation = operationState.generation
+        let token = UUID()
+        inspectorPreviewActive = (token, item, generation)
+        inspectorPreviewDesiredItem = nil
+        let maxPixelSize = InspectorPreviewProvider.requestedMaxPixelSize(
+            width: item.model.width,
+            height: item.model.height
+        )
+        inspectorPreviewTimeoutTask?.cancel()
+        let timeout = inspectorPreviewTimeout
+        inspectorPreviewTimeoutTask = Task { [weak self] in
+            try? await Task.sleep(for: timeout)
+            guard !Task.isCancelled else { return }
+            self?.finishInspectorPreview(token: token, image: nil)
+        }
+        inspectorPreviewRequest(item.token, maxPixelSize) { [weak self] image in
+            Task { @MainActor in
+                self?.finishInspectorPreview(token: token, image: image)
+            }
+        }
+    }
+
+    private func finishInspectorPreview(token: UUID, image: NSImage?) {
+        guard let active = inspectorPreviewActive, active.token == token else { return }
+        inspectorPreviewTimeoutTask?.cancel()
+        inspectorPreviewTimeoutTask = nil
+        inspectorPreviewActive = nil
+
+        guard operationState.isCurrent(generation: active.generation) else { return }
+        if let image {
+            insertInspectorPreview(image, for: active.item.id)
+        } else if inspectorPreviewSelectedID == active.item.id {
+            inspectorPreviewFailedSelectionID = active.item.id
+        }
+        startDesiredInspectorPreviewIfPossible()
+    }
+
+    private func insertInspectorPreview(_ image: NSImage, for id: String) {
+        if let previousCost = inspectorPreviewCostByID[id] {
+            inspectorPreviewTotalCost -= previousCost
+        }
+        inspectorPreviewAccessOrder.removeAll { $0 == id }
+
+        let cost = Self.thumbnailCost(of: image)
+        inspectorPreviewCache[id] = image
+        inspectorPreviewCostByID[id] = cost
+        inspectorPreviewTotalCost += cost
+        inspectorPreviewAccessOrder.append(id)
+        trimInspectorPreviewCacheIfNeeded()
+    }
+
+    private func touchInspectorPreview(_ id: String) {
+        inspectorPreviewAccessOrder.removeAll { $0 == id }
+        inspectorPreviewAccessOrder.append(id)
+    }
+
+    private func trimInspectorPreviewCacheIfNeeded() {
+        while inspectorPreviewCache.count > Self.inspectorPreviewCountLimit
+            || (inspectorPreviewTotalCost > Self.inspectorPreviewCostLimit
+                && !inspectorPreviewAccessOrder.isEmpty) {
+            let id = inspectorPreviewAccessOrder.removeFirst()
+            inspectorPreviewCache.removeValue(forKey: id)
+            inspectorPreviewTotalCost -= inspectorPreviewCostByID.removeValue(forKey: id) ?? 0
+        }
+        inspectorPreviewTotalCost = max(0, inspectorPreviewTotalCost)
+    }
+
+    private func resetInspectorPreviews() {
+        inspectorPreviewTimeoutTask?.cancel()
+        inspectorPreviewTimeoutTask = nil
+        inspectorPreviewSelectedID = nil
+        inspectorPreviewDesiredItem = nil
+        inspectorPreviewFailedSelectionID = nil
+        inspectorPreviewActive = nil
+        inspectorPreviewCache.removeAll()
+        inspectorPreviewAccessOrder.removeAll()
+        inspectorPreviewCostByID.removeAll()
+        inspectorPreviewTotalCost = 0
+    }
+
+    private func applyScanPayload(
+        _ payload: ScanPayload,
+        preservingImportedDownloads: Bool = false
+    ) {
+        var importedURLsByFingerprint: [DeviceFileFingerprint: URL] = [:]
+        if preservingImportedDownloads {
+            for item in allItems {
+                if let fileURL = importedFileURLsByItemID[item.id] {
+                    importedURLsByFingerprint[item.token.fingerprint] = fileURL
+                }
+            }
+        }
         deviceName = payload.deviceName
+        deviceIdentityHash = payload.deviceIdentityHash
         allItems = payload.items
         duplicatePlan = payload.plan
         selection = MediaSelectionState()
         // The previous session's outstanding requests are meaningless now.
         thumbnailRequests.cancelAll()
         metadataRequests.cancelAll()
+        resetInspectorPreviews()
         // A scan can land while the user is mid-word. Applying the pending query now keeps
         // the visible field and the filtered catalog in agreement, instead of showing an
         // unfiltered list under a non-empty search box until the debounce fires.
         flushPendingSearch()
         refreshVisibleOrder()
         importedItemIDs.removeAll()
+        importedFileURLsByItemID.removeAll()
+        if preservingImportedDownloads {
+            for item in payload.items {
+                if let fileURL = importedURLsByFingerprint[item.token.fingerprint] {
+                    importedItemIDs.insert(item.id)
+                    importedFileURLsByItemID[item.id] = fileURL
+                }
+            }
+            reconcileImportedDownloads()
+        }
         recoveryAdvice = nil
         status = "Scanned \(payload.items.count) items. Conservative duplicates: \(payload.plan.delete.count)."
         fputs("ui-scan-succeeded: scanned=\(payload.items.count) duplicates=\(payload.plan.delete.count)\n", stderr)
@@ -744,12 +1028,12 @@ final class MediaBrowserViewModel: ObservableObject {
             return
         }
         let generation = operationState.generation
-        Task.detached(priority: .utility) { [weak self] in
+        Task { [weak self] in
             guard let self else {
                 return
             }
-            let summary = MetadataProvider.summary(for: item.cameraFile, timeoutSeconds: 30)
-            await self.cacheMetadata(summary, id: item.id, generation: generation)
+            let summary = try? await self.gateway.metadata(for: item.token, timeout: .seconds(30))
+            self.cacheMetadata(summary, id: item.id, generation: generation)
         }
     }
 
@@ -765,15 +1049,22 @@ final class MediaBrowserViewModel: ObservableObject {
         trimMetadataCacheIfNeeded()
     }
 
-    private func applyImportSummary(_ summary: DeviceImportSummary, destination: URL, requestedItems: [MediaItem]) {
+    private func applyImportSummary(_ summary: DeviceGatewayImportSummary, destination: URL, requestedItems: [MediaItem]) {
         if let filename = summary.successful.last?.filename {
             lastImportedFileURL = destination.appendingPathComponent(filename)
         }
-        let successfulHandles = Set(summary.successful.map(\.file.ptpObjectHandle))
-        let successfulIDs = requestedItems
-            .filter { successfulHandles.contains($0.cameraFile.ptpObjectHandle) }
-            .map(\.id)
-        importedItemIDs.formUnion(successfulIDs)
+        let requestedIDsByToken = Dictionary(uniqueKeysWithValues: requestedItems.map {
+            ($0.token, $0.id)
+        })
+        for successfulDownload in summary.successful {
+            guard let itemID = requestedIDsByToken[successfulDownload.token] else {
+                continue
+            }
+            recordSuccessfulDownload(
+                itemID: itemID,
+                fileURL: destination.appendingPathComponent(successfulDownload.filename)
+            )
+        }
         status = "Imported \(summary.successful.count) item(s), \(summary.failed.count) failed, \(summary.canceled.count) canceled."
         persistOperationResult(OperationResultRecord(
             id: UUID(),
@@ -784,45 +1075,140 @@ final class MediaBrowserViewModel: ObservableObject {
             successfulCount: summary.successful.count,
             failures: summary.failed.map { failure in
                 OperationResultRecord.Failure(
-                    filename: failure.file.name ?? "Unknown file",
-                    reason: failure.error.localizedDescription
+                    filename: failure.filename,
+                    reason: failure.reason
                 )
             },
-            canceledFilenames: summary.canceled.map { $0.name ?? "Unknown file" }
+            canceledFilenames: summary.canceled.map(\.fingerprint.name)
         ))
         operationProgress = nil
         operationCancellation = nil
         operationState.finish()
     }
 
-    private func applyDeleteSummary(_ summary: DeviceDeleteSummary, requestedItems: [MediaItem]) {
-        let requestedIDs = Set(requestedItems.map(\.id))
-        let successfulHandles = Set(summary.successful.map(\.ptpObjectHandle))
-        allItems.removeAll { item in
-            requestedIDs.contains(item.id) && successfulHandles.contains(item.cameraFile.ptpObjectHandle)
+    private func verifyDelete(
+        snapshot: DeletePlanSnapshot,
+        summary: DeviceGatewayDeleteSummary
+    ) async {
+        do {
+            let catalog = try await gateway.scan(timeout: .seconds(180))
+            let audit = DeleteReconciler.reconcile(
+                snapshot: snapshot,
+                summary: summary,
+                catalog: catalog
+            )
+            let payload = makeScanPayload(catalog)
+            applyScanPayload(payload, preservingImportedDownloads: true)
+            let removed = audit.items.filter { $0.outcome == .confirmedRemoved }.count
+            let unresolved = audit.items.count - removed
+            status = "Delete verified: \(removed) removed, \(unresolved) still present or unresolved."
+            persistOperationResult(makeDeleteRecord(audit: audit))
+        } catch {
+            let audit = DeleteReconciler.unverified(
+                snapshot: snapshot,
+                reason: error.localizedDescription,
+                frameworkSummary: summary
+            )
+            persistOperationResult(makeDeleteRecord(audit: audit))
+            status = "Delete finished, but verification is pending. Open Results to retry verification."
+            operationState.finish()
+        }
+        operationProgress = nil
+        operationCancellation = nil
+    }
+
+    private func makeScanPayload(_ snapshot: DeviceCatalogSnapshot) -> ScanPayload {
+        let items = snapshot.files.map { MediaItem(model: $0.model, token: $0.token) }
+        return ScanPayload(
+            deviceName: snapshot.deviceName,
+            deviceIdentityHash: snapshot.deviceIdentityHash,
+            items: items,
+            plan: DuplicatePlanner.plan(files: items.map(\.model), rule: .nameKindSize)
+        )
+    }
+
+    private func makeDeleteRecord(audit: DeleteAudit) -> OperationResultRecord {
+        let successfulCount = audit.items.filter { $0.outcome == .confirmedRemoved }.count
+        let failures = audit.items.compactMap { item -> OperationResultRecord.Failure? in
+            switch item.outcome {
+            case .confirmedRemoved, .canceled:
+                return nil
+            case .stillPresent, .frameworkFailed, .ambiguous, .verificationPending:
+                return OperationResultRecord.Failure(
+                    filename: item.filename,
+                    reason: item.reason ?? item.outcome.title
+                )
+            }
+        }
+        return OperationResultRecord(
+            id: audit.snapshot.id,
+            date: audit.snapshot.date,
+            kind: .deleting,
+            destinationPath: nil,
+            requestedCount: audit.items.count,
+            successfulCount: successfulCount,
+            failures: failures,
+            canceledFilenames: audit.items
+                .filter { $0.outcome == .canceled }
+                .map(\.filename),
+            deleteAudit: audit
+        )
+    }
+
+    private func persistRequiredDeleteRecord(_ record: OperationResultRecord) -> Bool {
+        do {
+            operationHistory = try operationResultStore.append(record)
+            operationHistoryWarning = nil
+            return true
+        } catch {
+            operationHistoryWarning = "The required delete audit could not be saved: \(error.localizedDescription)"
+            return false
+        }
+    }
+
+    /// Reconciles state derived from the current catalog after the device confirms which
+    /// requested items were actually deleted. Failed and canceled IDs are intentionally
+    /// absent, so their catalog rows and imported badges remain visible.
+    func applySuccessfulDeletion(itemIDs: Set<String>) {
+        allItems.removeAll { itemIDs.contains($0.id) }
+        importedItemIDs.subtract(itemIDs)
+        for itemID in itemIDs {
+            importedFileURLsByItemID.removeValue(forKey: itemID)
         }
         duplicatePlan = DuplicatePlanner.plan(files: allItems.map(\.model), rule: .nameKindSize)
         refreshVisibleOrder()
-        status = "Deleted \(summary.successful.count) item(s), \(summary.failed.count) failed, \(summary.canceled.count) canceled."
-        let failureReason = summary.error?.localizedDescription ?? "The device did not delete this item."
-        persistOperationResult(OperationResultRecord(
-            id: UUID(),
-            date: Date(),
-            kind: .deleting,
-            destinationPath: nil,
-            requestedCount: requestedItems.count,
-            successfulCount: summary.successful.count,
-            failures: summary.failed.map {
-                OperationResultRecord.Failure(
-                    filename: $0.name ?? "Unknown file",
-                    reason: failureReason
-                )
-            },
-            canceledFilenames: summary.canceled.map { $0.name ?? "Unknown file" }
-        ))
-        operationProgress = nil
-        operationCancellation = nil
-        operationState.finish()
+    }
+
+    func recordSuccessfulDownload(itemID: String, fileURL: URL) {
+        importedFileURLsByItemID[itemID] = fileURL.standardizedFileURL
+        importedItemIDs.insert(itemID)
+    }
+
+    /// Reconciles the session badge with the local copy after the user returns from Finder.
+    /// The device catalog item remains; only the stale local-download decoration is removed.
+    func reconcileImportedDownloads() {
+        let missingItemIDs = Set(importedFileURLsByItemID.compactMap { itemID, fileURL in
+            isExistingRegularFile(fileURL) ? nil : itemID
+        })
+        guard !missingItemIDs.isEmpty else { return }
+
+        importedItemIDs.subtract(missingItemIDs)
+        for itemID in missingItemIDs {
+            importedFileURLsByItemID.removeValue(forKey: itemID)
+        }
+        if !operationState.isBusy {
+            status = "Downloaded \(importedItemIDs.count) item(s) remain locally."
+        }
+        if let lastImportedFileURL, !isExistingRegularFile(lastImportedFileURL) {
+            self.lastImportedFileURL = nil
+        }
+    }
+
+    private func isExistingRegularFile(_ url: URL) -> Bool {
+        guard let attributes = try? FileManager.default.attributesOfItem(atPath: url.path) else {
+            return false
+        }
+        return attributes[.type] as? FileAttributeType == .typeRegular
     }
 
     private func applyDeleteFailure(_ message: String) {
@@ -848,11 +1234,13 @@ final class MediaBrowserViewModel: ObservableObject {
     }
 
     private func persistOperationResult(_ record: OperationResultRecord) {
-        guard record.hasIssues else { return }
+        guard record.shouldPersist else { return }
         do {
             operationHistory = try operationResultStore.append(record)
             operationHistoryWarning = nil
-            isShowingOperationHistory = true
+            if record.hasIssues {
+                isShowingOperationHistory = true
+            }
         } catch {
             operationHistoryWarning = "This result could not be saved: \(error.localizedDescription)"
             status += " The detailed result could not be saved."

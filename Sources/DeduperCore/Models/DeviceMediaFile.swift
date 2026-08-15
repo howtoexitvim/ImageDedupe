@@ -1,4 +1,4 @@
-public struct DeviceMediaFile: Equatable, Sendable {
+public struct DeviceMediaFile: Equatable, Codable, Sendable {
     public let id: String
     public let name: String
     public let kind: String

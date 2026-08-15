@@ -1,54 +1,43 @@
 import Foundation
 
-/// Thread-safe cancellation shared by the AppKit main actor and synchronous
-/// ImageCaptureCore controller loops.
-public final class DeviceOperationCancellation: @unchecked Sendable {
-    private let lock = NSLock()
+/// Main-actor cancellation shared by the UI and the ImageCapture gateway.
+@MainActor
+public final class DeviceOperationCancellation {
     private var requested = false
     private var activeProgress: Progress?
+    private var activeCancelAction: (() -> Void)?
 
     public init() {}
 
     public var isCancellationRequested: Bool {
-        lock.lock()
-        defer { lock.unlock() }
-        return requested
+        requested
     }
 
     /// Returns `true` only for the first request.
     @discardableResult
     public func cancel() -> Bool {
-        let progress: Progress?
-        lock.lock()
         guard !requested else {
-            lock.unlock()
             return false
         }
         requested = true
-        progress = activeProgress
-        lock.unlock()
-
-        progress?.cancel()
+        activeProgress?.cancel()
+        activeCancelAction?()
         return true
     }
 
-    public func bind(_ progress: Progress?) {
-        let shouldCancel: Bool
-        lock.lock()
+    public func bind(_ progress: Progress?, onCancel: (() -> Void)? = nil) {
         activeProgress = progress
-        shouldCancel = requested
-        lock.unlock()
-
-        if shouldCancel {
+        activeCancelAction = onCancel
+        if requested {
             progress?.cancel()
+            onCancel?()
         }
     }
 
     public func unbind(_ progress: Progress?) {
-        lock.lock()
-        if activeProgress === progress {
+        if progress == nil || activeProgress === progress {
             activeProgress = nil
+            activeCancelAction = nil
         }
-        lock.unlock()
     }
 }

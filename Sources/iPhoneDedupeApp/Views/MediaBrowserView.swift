@@ -78,6 +78,9 @@ struct MediaBrowserView: View {
                 viewModel.scan()
             }
         }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+            viewModel.reconcileImportedDownloads()
+        }
         .onReceive(NotificationCenter.default.publisher(for: .mediaResetLayout)) { _ in
             panePreferences.reset()
             columnVisibility = .all
@@ -86,6 +89,7 @@ struct MediaBrowserView: View {
             OperationHistoryView(
                 records: viewModel.operationHistory,
                 warning: viewModel.operationHistoryWarning,
+                onRetryVerification: { viewModel.retryDeleteVerification(recordID: $0) },
                 onClear: { viewModel.clearOperationHistory() },
                 onDone: { viewModel.isShowingOperationHistory = false }
             )
@@ -125,7 +129,7 @@ struct MediaBrowserView: View {
             }
         }
         .listStyle(.sidebar)
-        .onChange(of: sidebarSelection) { selection in
+        .onChange(of: sidebarSelection) { _, selection in
             switch selection {
             case .device, .allMedia:
                 viewModel.selectReviewScope(.allMedia)
@@ -231,10 +235,11 @@ struct MediaBrowserView: View {
             }
             .menuStyle(.borderlessButton)
 
-            Button("Import") {
+            Button("Download") {
                 viewModel.importSelected()
             }
             .disabled(viewModel.selectedActionIDs.isEmpty || viewModel.isDeviceBusy)
+            .accessibilityLabel("Download")
 
             Button {
                 viewModel.revealLastImportInFinder()
@@ -306,16 +311,18 @@ struct MediaBrowserView: View {
         .padding(.vertical, 6)
         .accessibilityElement(children: .contain)
         .confirmationDialog(
-            "Delete \(viewModel.selectedActionIDs.count) item(s) from this iPhone?",
+            "Delete \(viewModel.pendingDeleteSnapshot?.items.count ?? 0) item(s) from this iPhone?",
             isPresented: $viewModel.isConfirmingDelete,
             titleVisibility: .visible
         ) {
             Button("Delete From Device", role: .destructive) {
                 viewModel.deleteSelected()
             }
-            Button("Cancel", role: .cancel) {}
+            Button("Cancel", role: .cancel) {
+                viewModel.cancelDeleteConfirmation()
+            }
         } message: {
-            Text("This uses ImageCaptureCore device deletion and cannot be undone by this app.")
+            Text("\(ByteCountFormatter.string(fromByteCount: viewModel.pendingDeleteSnapshot?.totalBytes ?? 0, countStyle: .file)) will be submitted to ImageCaptureCore device deletion and cannot be undone by this app.")
         }
     }
 

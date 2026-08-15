@@ -6,6 +6,7 @@ import XCTest
 ///
 /// Both renderers share this maths so List and Grid feel identical. Everything here is a
 /// pure function of rectangles, so it is testable without a window or a run loop.
+@MainActor
 final class ScrollIntoViewTests: XCTestCase {
     // MARK: - Keyboard scroll into view
 

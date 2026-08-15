@@ -284,7 +284,7 @@ struct MediaCollectionView: NSViewRepresentable {
             menu.addItem(select)
             menu.addItem(.separator())
 
-            let importItem = NSMenuItem(title: "Import \(label)", action: #selector(importFromMenu), keyEquivalent: "")
+            let importItem = NSMenuItem(title: "Download \(label)", action: #selector(importFromMenu), keyEquivalent: "")
             importItem.target = self
             menu.addItem(importItem)
 

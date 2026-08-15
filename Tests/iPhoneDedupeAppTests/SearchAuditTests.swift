@@ -21,7 +21,7 @@ final class SearchAuditTests: XCTestCase {
                     height: nil,
                     duration: name.hasSuffix(".mp4") ? 30 : nil
                 ),
-                cameraFile: ICCameraFile()
+                token: .fixture()
             )
         }
         viewModel.refreshVisibleOrder()
@@ -45,7 +45,7 @@ final class SearchAuditTests: XCTestCase {
                     id: "new-1", name: "IMG_0001.HEIC", kind: "heic",
                     size: 10, timestamp: nil, width: nil, height: nil
                 ),
-                cameraFile: ICCameraFile()
+                token: .fixture()
             )
         ]
         viewModel.refreshVisibleOrder()
@@ -159,7 +159,7 @@ final class SearchAuditTests: XCTestCase {
                     size: 181_000_000, timestamp: "2025-03-01T10:00:00Z",
                     width: 1_920, height: 1_080, duration: 111.25
                 ),
-                cameraFile: ICCameraFile()
+                token: .fixture()
             )
         ]
         viewModel.refreshVisibleOrder()
@@ -178,7 +178,7 @@ final class SearchAuditTests: XCTestCase {
                     id: "id-0", name: "PHOTO.HEIC", kind: "heic",
                     size: 100, timestamp: nil, width: 1_920, height: 1_080
                 ),
-                cameraFile: ICCameraFile()
+                token: .fixture()
             )
         ]
         viewModel.refreshVisibleOrder()
@@ -198,14 +198,14 @@ final class SearchAuditTests: XCTestCase {
                     id: "short", name: "A.MOV", kind: "mov", size: 10,
                     timestamp: nil, width: nil, height: nil, duration: 5
                 ),
-                cameraFile: ICCameraFile()
+                token: .fixture()
             ),
             MediaBrowserViewModel.MediaItem(
                 model: DeviceMediaFile(
                     id: "long", name: "B.MOV", kind: "mov", size: 10,
                     timestamp: nil, width: nil, height: nil, duration: 300
                 ),
-                cameraFile: ICCameraFile()
+                token: .fixture()
             )
         ]
         viewModel.refreshVisibleOrder()
@@ -244,7 +244,7 @@ final class SearchAuditTests: XCTestCase {
                     id: "id-0", name: "CLIP.QT", kind: "mov",
                     size: 10, timestamp: nil, width: nil, height: nil
                 ),
-                cameraFile: ICCameraFile()
+                token: .fixture()
             )
         ]
         viewModel.refreshVisibleOrder()
@@ -288,14 +288,14 @@ final class SearchAuditTests: XCTestCase {
                     id: "match", name: "IMG_0001.MOV", kind: "mov",
                     size: 10, timestamp: nil, width: nil, height: nil
                 ),
-                cameraFile: ICCameraFile()
+                token: .fixture()
             ),
             MediaBrowserViewModel.MediaItem(
                 model: DeviceMediaFile(
                     id: "wrong-kind", name: "IMG_0002.HEIC", kind: "heic",
                     size: 10, timestamp: nil, width: nil, height: nil
                 ),
-                cameraFile: ICCameraFile()
+                token: .fixture()
             )
         ]
         viewModel.refreshVisibleOrder()

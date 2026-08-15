@@ -21,7 +21,7 @@ final class MediaTableViewTests: XCTestCase {
                 width: nil,
                 height: nil
             ),
-            cameraFile: ICCameraFile()
+            token: .fixture()
         )
     }
 
@@ -162,6 +162,16 @@ final class MediaTableViewTests: XCTestCase {
         XCTAssertFalse(controller.handleKey(.down, modifiers: []))
         XCTAssertFalse(controller.handleKey(.space, modifiers: []))
         XCTAssertFalse(controller.handleKey(.selectAll, modifiers: .command))
+    }
+
+    func testContextMenuUsesDownloadForTheTransferAction() {
+        let viewModel = viewModel(["a"])
+        let coordinator = MediaTableView.Coordinator(viewModel: viewModel)
+        coordinator.apply(items: viewModel.filteredItems)
+
+        let titles = coordinator.contextMenu(forRow: 0)?.items.map(\.title)
+
+        XCTAssertEqual(titles, ["Select", "", "Download “a.heic”", "Delete “a.heic”"])
     }
 
     // MARK: - Drag selection

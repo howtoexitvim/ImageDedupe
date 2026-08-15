@@ -99,24 +99,32 @@ private func printUsage() {
     """)
 }
 
-private func scanWithRetry(timeout: TimeInterval, attempts: Int = 3, delaySeconds: TimeInterval = 3) throws -> DeviceScanResult {
+@MainActor
+private func scanWithRetry(
+    gateway: ImageCaptureDeviceGateway,
+    timeout: TimeInterval,
+    attempts: Int = 3,
+    delaySeconds: TimeInterval = 3
+) async throws -> DeviceCatalogSnapshot {
     var lastError: Error?
     for attempt in 1...attempts {
         do {
-            return try DeviceSessionController(timeoutSeconds: timeout).scan()
+            return try await gateway.scan(timeout: .seconds(timeout))
         } catch {
             lastError = error
             if attempt < attempts {
                 fputs("warning: scan attempt \(attempt) failed: \(error). Retrying...\n", stderr)
-                Thread.sleep(forTimeInterval: delaySeconds)
+                try await Task.sleep(for: .seconds(delaySeconds))
             }
         }
     }
     throw lastError ?? DeviceMediaError.noDevice
 }
 
-private func runScan(timeout: TimeInterval) throws {
-    let result = try scanWithRetry(timeout: timeout)
+@MainActor
+private func runScan(timeout: TimeInterval) async throws {
+    let gateway = ImageCaptureDeviceGateway()
+    let result = try await scanWithRetry(gateway: gateway, timeout: timeout)
     let files = result.files.map(\.model)
     let conservativePlan = DuplicatePlanner.plan(files: files, rule: .nameKindSize)
     let timestampPlan = DuplicatePlanner.plan(files: files, rule: .timestampKindSize)
@@ -137,12 +145,14 @@ private func runScan(timeout: TimeInterval) throws {
     }
 }
 
-private func findExactName(_ args: Arguments) throws {
+@MainActor
+private func findExactName(_ args: Arguments) async throws {
     guard let targetName = args.targetName, !targetName.isEmpty else {
         throw CommandError.missingValue("--target-name")
     }
 
-    let result = try scanWithRetry(timeout: args.timeout)
+    let gateway = ImageCaptureDeviceGateway()
+    let result = try await scanWithRetry(gateway: gateway, timeout: args.timeout)
     let matches = result.files.filter { $0.model.name == targetName }
     print("device=\(result.deviceName)")
     print("scanned=\(result.files.count)")
@@ -153,12 +163,14 @@ private func findExactName(_ args: Arguments) throws {
     }
 }
 
-private func inspectLocation(_ args: Arguments) throws {
+@MainActor
+private func inspectLocation(_ args: Arguments) async throws {
     guard let targetName = args.targetName, !targetName.isEmpty else {
         throw CommandError.missingValue("--target-name")
     }
 
-    let result = try scanWithRetry(timeout: args.timeout)
+    let gateway = ImageCaptureDeviceGateway()
+    let result = try await scanWithRetry(gateway: gateway, timeout: args.timeout)
     let matches = result.files.filter { $0.model.name == targetName }
     print("device=\(result.deviceName)")
     print("scanned=\(result.files.count)")
@@ -169,33 +181,25 @@ private func inspectLocation(_ args: Arguments) throws {
     }
 
     print("mapped.location=\(match.model.location ?? "unknown")")
-    print("camera.gpsString=\(match.cameraFile.gpsString ?? "unknown")")
-    print("camera.width=\(match.cameraFile.width)")
-    print("camera.height=\(match.cameraFile.height)")
+    print("mapped.width=\(match.model.width.map(String.init) ?? "unknown")")
+    print("mapped.height=\(match.model.height.map(String.init) ?? "unknown")")
     print("requestingMetadata=true")
 
-    guard let metadata = MetadataProvider.metadata(for: match.cameraFile, timeoutSeconds: 30) else {
+    guard let metadata = try await gateway.metadata(for: match.token, timeout: .seconds(30)) else {
         print("metadata=nil")
         return
     }
 
-    print("metadata.keys=\(metadata.keys.map { String(describing: $0) }.sorted().joined(separator: ","))")
-    printMetadataSection(metadata, key: "{GPS}")
-    printMetadataSection(metadata, key: "GPS")
-    printMetadataSection(metadata, key: "{Exif}")
-    printMetadataSection(metadata, key: "Exif")
-    printMetadataSection(metadata, key: "{TIFF}")
-    printMetadataSection(metadata, key: "TIFF")
+    print("metadata.location=\(metadata.location ?? "unknown")")
+    print("metadata.aperture=\(metadata.aperture ?? "unknown")")
+    print("metadata.colorSpace=\(metadata.colorSpace ?? "unknown")")
+    print("metadata.shutterSpeed=\(metadata.shutterSpeed ?? "unknown")")
+    print("metadata.maker=\(metadata.maker ?? "unknown")")
+    print("metadata.model=\(metadata.model ?? "unknown")")
 }
 
-private func printMetadataSection(_ metadata: [AnyHashable: Any], key: String) {
-    guard let section = metadata[key] else {
-        return
-    }
-    print("metadata.\(key)=\(section)")
-}
-
-private func deleteExactName(_ args: Arguments) throws {
+@MainActor
+private func deleteExactName(_ args: Arguments) async throws {
     guard args.delete, args.confirmed else {
         throw CommandError.deleteNotConfirmed
     }
@@ -203,8 +207,8 @@ private func deleteExactName(_ args: Arguments) throws {
         throw CommandError.missingValue("--target-name")
     }
 
-    let controller = DeviceSessionController(timeoutSeconds: args.timeout)
-    let result = try scanWithRetry(timeout: args.timeout)
+    let gateway = ImageCaptureDeviceGateway()
+    let result = try await scanWithRetry(gateway: gateway, timeout: args.timeout)
     let matches = result.files.filter { $0.model.name == targetName }
 
     print("device=\(result.deviceName)")
@@ -219,21 +223,22 @@ private func deleteExactName(_ args: Arguments) throws {
         throw CommandError.unsafeMatchCount(matches.count)
     }
 
-    let summary = try controller.delete(matches.map(\.cameraFile), from: result.device, confirmed: true)
+    let summary = try await gateway.delete(
+        matches.map(\.token),
+        confirmed: true,
+        timeout: .seconds(args.timeout)
+    )
     print("deleteSuccessful=\(summary.successful.count)")
     print("deleteFailed=\(summary.failed.count)")
     print("deleteCanceled=\(summary.canceled.count)")
-    if let error = summary.error {
-        print("deleteError=\(error)")
-    }
-
-    let after = try scanWithRetry(timeout: args.timeout)
+    let after = try await scanWithRetry(gateway: gateway, timeout: args.timeout)
     let remaining = after.files.filter { $0.model.name == targetName }
     print("scannedAfter=\(after.files.count)")
     print("remainingExactMatches=\(remaining.count)")
 }
 
-private func importExactName(_ args: Arguments) throws {
+@MainActor
+private func importExactName(_ args: Arguments) async throws {
     guard let targetName = args.targetName, !targetName.isEmpty else {
         throw CommandError.missingValue("--target-name")
     }
@@ -241,8 +246,12 @@ private func importExactName(_ args: Arguments) throws {
         throw CommandError.missingValue("--destination")
     }
     try FileManager.default.createDirectory(at: destination, withIntermediateDirectories: true)
-
-    let result = try scanWithRetry(timeout: args.timeout)
+    let destinationIdentity = try ImportDestinationIdentity.capture(destination: destination)
+    let stagingManager = ImportStagingManager.applicationCaches()
+    let stagingSession = try stagingManager.createSession()
+    defer { try? stagingManager.cleanup(stagingSession) }
+    let gateway = ImageCaptureDeviceGateway()
+    let result = try await scanWithRetry(gateway: gateway, timeout: args.timeout)
     let matches = result.files.filter { $0.model.name == targetName }
     print("device=\(result.deviceName)")
     print("scanned=\(result.files.count)")
@@ -252,14 +261,27 @@ private func importExactName(_ args: Arguments) throws {
         throw CommandError.unsafeMatchCount(matches.count)
     }
 
-    let summary = DeviceImportController(timeoutSeconds: args.timeout).importFiles(matches.map(\.cameraFile), to: destination)
+    let summary = await gateway.download(
+        matches.map(\.token),
+        to: stagingSession,
+        timeout: .seconds(args.timeout)
+    )
     print("importSuccessful=\(summary.successful.count)")
     print("importFailed=\(summary.failed.count)")
     for imported in summary.successful {
-        print("imported=\(destination.appendingPathComponent(imported.filename).path)")
+        let output = try DestinationCommitter.commit(
+            stagedFilename: imported.filename,
+            stagingDirectory: stagingSession.directory,
+            stagingIdentity: stagingSession.identity,
+            stagedIdentity: imported.stagedIdentity,
+            filename: matches[0].model.name,
+            destination: destination,
+            destinationIdentity: destinationIdentity
+        )
+        print("imported=\(output.path)")
     }
     for failure in summary.failed {
-        print("failure=\(failure.file.name ?? "unknown") error=\(failure.error)")
+        print("failure=\(failure.filename) error=\(failure.reason)")
     }
 }
 
@@ -267,15 +289,15 @@ do {
     let args = try Arguments.parse(Array(CommandLine.arguments.dropFirst()))
     switch args.command {
     case "scan":
-        try runScan(timeout: args.timeout)
+        try await runScan(timeout: args.timeout)
     case "find-exact-name":
-        try findExactName(args)
+        try await findExactName(args)
     case "inspect-location":
-        try inspectLocation(args)
+        try await inspectLocation(args)
     case "import-exact-name":
-        try importExactName(args)
+        try await importExactName(args)
     case "delete-exact-name":
-        try deleteExactName(args)
+        try await deleteExactName(args)
     default:
         throw CommandError.unknownCommand(args.command)
     }

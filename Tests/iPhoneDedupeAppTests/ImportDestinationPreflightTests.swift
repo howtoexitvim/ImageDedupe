@@ -14,7 +14,7 @@ final class ImportDestinationPreflightTests: XCTestCase {
             facts: facts(availableCapacity: 2_000)
         )
 
-        XCTAssertEqual(result, .ready(requiredBytes: 1_000, availableBytes: 2_000))
+        XCTAssertEqual(result, .ready(requiredBytes: 1_600, availableBytes: 2_000))
     }
 
     func testNonDirectoryIsBlocked() {
@@ -56,10 +56,23 @@ final class ImportDestinationPreflightTests: XCTestCase {
     func testInsufficientCapacityReportsRequiredAndAvailableBytes() {
         let result = ImportDestinationPreflight.evaluate(
             items: items,
-            facts: facts(availableCapacity: 999)
+            facts: facts(availableCapacity: 1_599)
         )
 
-        XCTAssertEqual(result, .blocked(.insufficientSpace(requiredBytes: 1_000, availableBytes: 999)))
+        XCTAssertEqual(result, .blocked(.insufficientSpace(requiredBytes: 1_600, availableBytes: 1_599)))
+    }
+
+    func testDifferentVolumeRequiresOneLargestFileOfStagingCapacity() {
+        let result = ImportDestinationPreflight.evaluate(
+            items: items,
+            facts: facts(
+                availableCapacity: 1_000,
+                stagingSharesDestinationVolume: false,
+                stagingAvailableCapacity: 599
+            )
+        )
+
+        XCTAssertEqual(result, .blocked(.insufficientStagingSpace(requiredBytes: 600, availableBytes: 599)))
     }
 
     func testExistingFilenameCollisionIsBlocked() {
@@ -122,6 +135,8 @@ final class ImportDestinationPreflightTests: XCTestCase {
         isLocalVolume: Bool = true,
         isWritable: Bool = true,
         availableCapacity: Int64? = 2_000,
+        stagingSharesDestinationVolume: Bool = true,
+        stagingAvailableCapacity: Int64? = 2_000,
         existingFilenames: Set<String> = []
     ) -> ImportDestinationPreflight.Facts {
         ImportDestinationPreflight.Facts(
@@ -129,6 +144,8 @@ final class ImportDestinationPreflightTests: XCTestCase {
             isLocalVolume: isLocalVolume,
             isWritable: isWritable,
             availableCapacity: availableCapacity,
+            stagingSharesDestinationVolume: stagingSharesDestinationVolume,
+            stagingAvailableCapacity: stagingAvailableCapacity,
             existingFilenames: existingFilenames
         )
     }

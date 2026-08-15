@@ -14,6 +14,13 @@ struct InspectorView: View {
                 emptySelection
             }
         }
+        .task(id: viewModel.selectedItemID) {
+            if let item = viewModel.selectedItem {
+                viewModel.loadInspectorPreview(for: item)
+            } else {
+                viewModel.clearInspectorPreviewSelection()
+            }
+        }
     }
 
     private var emptySelection: some View {
@@ -36,7 +43,7 @@ struct InspectorView: View {
     private func preview(for item: MediaBrowserViewModel.MediaItem) -> some View {
         VStack(alignment: .leading, spacing: 10) {
             Group {
-                if let image = viewModel.thumbnailCache[item.id] {
+                if let image = viewModel.inspectorPreviewImage(for: item) {
                     Image(nsImage: image)
                         .resizable()
                         .scaledToFit()
