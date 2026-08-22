@@ -29,24 +29,15 @@ Everything stays local. There is no cloud upload, sign-in, or analytics.
 
 ## Screenshots
 
-<table>
-  <tr>
-    <td align="center"><strong>Connect & Scan</strong></td>
-    <td align="center"><strong>Detailed List</strong></td>
-  </tr>
-  <tr>
-    <td width="50%"><img width="100%" src="resources/images/readme/scan-empty.png" alt="Image Dedupe waiting for an iPhone connection" /></td>
-    <td width="50%"><img width="100%" src="resources/images/readme/all-media-list.png" alt="Image Dedupe media list and metadata inspector" /></td>
-  </tr>
-  <tr>
-    <td align="center"><strong>Visual Grid</strong></td>
-    <td align="center"><strong>Duplicate Review</strong></td>
-  </tr>
-  <tr>
-    <td width="50%"><img width="100%" src="resources/images/readme/all-media-grid.png" alt="Image Dedupe media grid and metadata inspector" /></td>
-    <td width="50%"><img width="100%" src="resources/images/readme/duplicates-review.png" alt="Image Dedupe duplicate candidate review" /></td>
-  </tr>
-</table>
+<p align="center">
+  <img width="49%" src="resources/images/readme/scan-empty.png" alt="Image Dedupe waiting for an iPhone connection" />
+  <img width="49%" src="resources/images/readme/all-media-list.png" alt="Image Dedupe media list and metadata inspector" />
+</p>
+
+<p align="center">
+  <img width="49%" src="resources/images/readme/all-media-grid.png" alt="Image Dedupe media grid and metadata inspector" />
+  <img width="49%" src="resources/images/readme/duplicates-review.png" alt="Image Dedupe duplicate candidate review" />
+</p>
 
 ## Safety Model
 
