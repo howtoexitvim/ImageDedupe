@@ -29,30 +29,24 @@ Everything stays local. There is no cloud upload, sign-in, or analytics.
 
 ## Screenshots
 
-<div align="center">
-  <img src="resources/images/readme/scan-empty.png" width="82%" alt="Image Dedupe waiting for an iPhone connection" />
-  <br />
-  <sub>Connect and unlock an iPhone, then start a local scan.</sub>
-</div>
-
-<br />
-
 <table>
   <tr>
+    <td align="center"><strong>Connect & Scan</strong></td>
     <td align="center"><strong>Detailed List</strong></td>
-    <td align="center"><strong>Visual Grid</strong></td>
   </tr>
   <tr>
-    <td><img src="resources/images/readme/all-media-list.png" alt="Image Dedupe media list and metadata inspector" /></td>
-    <td><img src="resources/images/readme/all-media-grid.png" alt="Image Dedupe media grid and metadata inspector" /></td>
+    <td width="50%"><img width="100%" src="resources/images/readme/scan-empty.png" alt="Image Dedupe waiting for an iPhone connection" /></td>
+    <td width="50%"><img width="100%" src="resources/images/readme/all-media-list.png" alt="Image Dedupe media list and metadata inspector" /></td>
+  </tr>
+  <tr>
+    <td align="center"><strong>Visual Grid</strong></td>
+    <td align="center"><strong>Duplicate Review</strong></td>
+  </tr>
+  <tr>
+    <td width="50%"><img width="100%" src="resources/images/readme/all-media-grid.png" alt="Image Dedupe media grid and metadata inspector" /></td>
+    <td width="50%"><img width="100%" src="resources/images/readme/duplicates-review.png" alt="Image Dedupe duplicate candidate review" /></td>
   </tr>
 </table>
-
-<div align="center">
-  <img src="resources/images/readme/duplicates-review.png" width="82%" alt="Image Dedupe duplicate candidate review" />
-  <br />
-  <sub>Duplicate candidates stay visible for manual review before any action.</sub>
-</div>
 
 ## Safety Model
 
