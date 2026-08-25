@@ -10,7 +10,7 @@ Formerly named iPhone Dedupe. The rename carries existing operation history and 
 
 Phases 0–8 are merged into `main`. The current Debug app has been exercised against a connected iPhone and loaded 3,961/3,961 media items.
 
-The source and local Hardened Runtime build gate are complete. Public distribution is not complete: Developer ID signing, Apple notarization/stapling, clean-Mac Gatekeeper validation, and the App Sandbox decision remain open. See [docs/roadmap.md](docs/roadmap.md) for the authoritative remaining-work list.
+The source and local Hardened Runtime build gate are complete. An ad-hoc signed arm64 build is published on the public repository's releases page; because it is not notarized, users must clear the download quarantine flag manually. Developer ID signing, Apple notarization/stapling, clean-Mac Gatekeeper validation, a universal build, and the App Sandbox decision remain open. See [docs/roadmap.md](docs/roadmap.md) for the authoritative remaining-work list.
 
 ## Requirements
 
@@ -78,6 +78,18 @@ IMAGE_DEDUPE_NOTARY_PROFILE="profile-name" \
 ```
 
 The release scripts fail closed when required signing or notarization inputs are absent. No credential is stored in this repository.
+
+## Disk Image
+
+`scripts/package-dmg.sh` wraps an already-built candidate into `dist/Image-Dedupe-<version>.dmg` with the usual drag-to-Applications layout. It deliberately does not build: it packages the bundle `build-release-candidate.sh` produced, so the artifact that ships is the one that passed verification rather than a second build that resembles it.
+
+```sh
+IMAGE_DEDUPE_ALLOW_ADHOC=1 ./scripts/package-dmg.sh
+```
+
+It re-runs `verify-release.sh` on the bundle before wrapping it, and refuses ad-hoc signatures unless `IMAGE_DEDUPE_ALLOW_ADHOC=1` is set explicitly — a disk image is where an unverified bundle stops being a local mistake and becomes a download. With `IMAGE_DEDUPE_SIGNING_IDENTITY` set, the image itself is signed too; notarize the `.app` before packaging, since stapling applies to the bundle.
+
+`dist/` is ignored and never committed.
 
 ## Project Layout
 

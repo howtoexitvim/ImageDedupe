@@ -243,4 +243,47 @@ final class HelperProtocolTests: XCTestCase {
             )
         }
     }
+
+    /// The disk image builder must verify the bundle it wraps, and must not weaken the
+    /// ad-hoc gate on its own.
+    ///
+    /// A disk image is where an unverified bundle stops being a local mistake and becomes
+    /// a download. `package-dmg.sh` deliberately does not build: it wraps the artifact
+    /// `build-release-candidate.sh` produced, so what ships is the bundle that passed
+    /// verification rather than a second build that merely resembles it. If it ever stops
+    /// calling the verifier, an ad-hoc or malformed bundle would reach users silently.
+    func testDiskImageScriptVerifiesTheBundleItWraps() throws {
+        let scripts = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("scripts")
+
+        let text = try String(
+            contentsOf: scripts.appendingPathComponent("package-dmg.sh"),
+            encoding: .utf8
+        )
+
+        XCTAssertTrue(
+            text.contains("verify-release.sh"),
+            "package-dmg.sh must verify the bundle before wrapping it for download."
+        )
+
+        // `--allow-adhoc` may only be reachable through the same explicit opt-in the
+        // builder uses; an unconditional pass would silently make ad-hoc distributable.
+        if text.contains("--allow-adhoc") {
+            XCTAssertTrue(
+                text.contains("IMAGE_DEDUPE_ALLOW_ADHOC"),
+                "package-dmg.sh may only relax the ad-hoc gate behind the explicit opt-in."
+            )
+        }
+
+        // ditto preserves the signature across the copy into the staging folder; cp -R
+        // does not reliably preserve extended attributes, and a mangled signature only
+        // reveals itself on the user's Mac.
+        XCTAssertTrue(
+            text.contains("ditto"),
+            "package-dmg.sh must copy the bundle with ditto to preserve its signature."
+        )
+    }
 }

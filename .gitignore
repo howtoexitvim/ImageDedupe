@@ -13,3 +13,6 @@ DerivedData/
 /outputs/image-dedupe
 /outputs/*.csv
 /image-dedupe-*.csv
+
+# Packaged release artifacts
+/dist
