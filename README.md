@@ -10,130 +10,81 @@
 
 </div>
 
-Image Dedupe is a Mac-native app for reviewing media on a connected iPhone, downloading the files you pick, spotting conservative duplicate candidates, and deleting reviewed device items on purpose.
+Image Dedupe is a Mac app for cleaning up the photos and videos on your iPhone.
 
-It is built on Apple's ImageCaptureCore framework. There is no account, no cloud backend, no analytics, no catalog upload, and no network client — everything stays on your Mac.
+Plug the phone in, scan it, and see everything in one window — a sortable list or a grid of thumbnails, with previews and metadata beside it. Search for what you want, download it, and delete what you no longer need.
 
-Nothing is ever deleted for you. The app proposes; you decide.
+It talks to the iPhone over the cable using Apple's own ImageCaptureCore. No account, no cloud, no analytics, no network client. Nothing leaves your Mac.
 
-Formerly named iPhone Dedupe. The rename carries existing operation history and preferences across automatically; the old name is kept only where an identifier had to stay stable.
+And nothing is ever deleted for you. The app proposes; you decide.
+
+## Why Image Dedupe
+
+- 🔒 **Everything stays local**: no sign-in, no upload, no telemetry. Just your Mac and the cable.
+- 🧊 **Conservative by design**: duplicates are candidates for you to review, never an automatic deletion.
+- 🔍 **Find anything fast**: search by filename, or narrow with `name:`, `kind:`, `size:`, and `duration:` filters.
+- 🖼️ **Look before you act**: List or Grid, sortable columns, and an Inspector with previews and real EXIF metadata.
+- ⬇️ **Download what you pick**: live progress, cancel any time, destination preflight, and no silent overwrites.
+- 🗑️ **Deletion you have to mean**: an explicit in-app confirmation, an audit record, and an automatic rescan afterwards.
+- 🆓 **Free and MIT licensed**.
+
+## Screenshots
+
+<div align="center">
+  <img src="assets/duplicates-review.png" width="88%" alt="Image Dedupe duplicate review: a group header reading QVKQ5385.JPG — 2 copies with both copies listed, one marked as the keeper, and an Inspector showing the preview and EXIF metadata" />
+</div>
+
+<br/>
+
+<table>
+	<tr>
+		<td align="center" colspan="2"><strong>Scanned 4189 items. Conservative duplicates: 1.</strong><br/>That status line is the whole philosophy. It only proposes what it is sure about.</td>
+	</tr>
+	<tr>
+		<td align="center"><strong>Plug in and scan</strong></td>
+		<td align="center"><strong>List view with Inspector</strong></td>
+	</tr>
+	<tr>
+		<td align="center"><img src="assets/scan-empty.png" alt="Image Dedupe waiting for an iPhone, with the Scan iPhone button in the empty state" /></td>
+		<td align="center"><img src="assets/all-media-list.png" alt="Image Dedupe list browser showing Name, Kind, Date and File Size columns with checkbox selection, the search field, and the Inspector pane" /></td>
+	</tr>
+	<tr>
+		<td align="center"><strong>Grid view</strong></td>
+		<td align="center"><strong>Duplicates, ready for review</strong></td>
+	</tr>
+	<tr>
+		<td align="center"><img src="assets/all-media-grid.png" alt="Image Dedupe grid browser showing the same library as thumbnails" /></td>
+		<td align="center"><img src="assets/duplicates-review.png" alt="Image Dedupe duplicate group with two copies of the same file and one marked as the keeper" /></td>
+	</tr>
+</table>
 
 ## Install
 
-Download the DMG from the [releases page](https://github.com/howtoexitvim/ImageDedupe/releases) — the current release is `ImageDedupe-v1.0` (version 1.0.0) — drag the app to Applications, then clear the download quarantine flag:
+Download the DMG from the [releases page](https://github.com/howtoexitvim/ImageDedupe/releases) — the current release is `ImageDedupe-v1.0` (version 1.0.0) — and drag **Image Dedupe** to your Applications folder.
+
+The build is ad-hoc signed and not notarized yet, so macOS blocks it until you clear the download flag. Run this once in Terminal:
 
 ```sh
 xattr -dr com.apple.quarantine "/Applications/Image Dedupe.app"
 ```
 
-The build is ad-hoc signed and **not** notarized, so Gatekeeper blocks it until you do this. macOS 14 or later, Apple silicon (arm64) only. If you would rather not run an unnotarized binary, build from source — see below.
+Then open the app normally.
 
-Before scanning, unlock the iPhone and trust the Mac, and quit Image Capture, Photos, and anything else that may hold the device session exclusively.
+**You will need:** macOS 14 or later on an Apple silicon Mac, an unlocked iPhone that trusts this Mac on a data-capable cable, and Image Capture and Photos closed while you scan.
 
-## Safety
+## Building from source
 
-Safety is the point of this project, not a feature of it.
-
-- Duplicate detection is deliberately conservative: it produces *candidates* for you to review, never an automatic deletion.
-- Device deletion always requires explicit in-app confirmation, writes a persisted audit record, and triggers an automatic rescan afterwards; retries are verification-only.
-- Automated or development-harness deletion additionally requires fresh user approval naming the exact fixture files. Old approval is never reusable.
-- Downloads stage into a private location and commit with descriptor-relative, no-overwrite semantics, so an existing file is never silently replaced.
-- No account, no cloud, no analytics, no network client.
-- Hardened Runtime is enforced by the local build gate, and the app ships a no-tracking privacy manifest.
-
-## Capabilities
-
-- native List and Grid browsers with shared focus and explicit checkbox selection;
-- filename search plus `name:`, `kind:`, `size:`, and `duration:` filters;
-- sortable and persistent List columns;
-- progressive static Inspector previews, capped at 2048 pixels with bounded memory caching;
-- conservative duplicate candidates — never automatic deletion;
-- download progress, current-file status, cancellation, destination preflight, and collision blocking;
-- explicit device-delete confirmation, persisted audit, automatic rescan, and verification-only retry;
-- persistent partial-failure and cancellation Results history;
-- Full Keyboard Access and VoiceOver semantics for the primary workflow.
-
-## Requirements
-
-- macOS 14 or later, Apple silicon (arm64);
-- Swift 6.2 toolchain (to build);
-- an unlocked, trusted iPhone connected with a data-capable cable;
-- Image Capture, Photos, and other apps that may exclusively hold the device session closed while scanning.
-
-## Build and Run
-
-Build the normal local Debug app bundle:
+Requires macOS 14 or later and the Swift 6.2 toolchain.
 
 ```sh
 ./scripts/build-debug-app.sh
 open "$(swift build --show-bin-path)/Image Dedupe.app"
-```
-
-Use the `.app` bundle for UI and accessibility testing. Running the raw SwiftPM executable bypasses normal macOS app registration and is not the acceptance path.
-
-Run the complete test suites:
-
-```sh
 swift test
-swift test -c release
 ```
 
-The latest verified baseline is 650 XCTest tests plus 22 Swift Testing tests, in both Debug and Release configurations.
+## Still to come
 
-The bundle scripts refuse to replace or re-sign their target while that exact app is running. Quit the app before rebuilding; this prevents macOS from terminating a live process with `Code Signature Invalid`.
-
-## Release Candidate
-
-An explicitly local, non-distributable ad-hoc Hardened Runtime candidate:
-
-```sh
-IMAGE_DEDUPE_ALLOW_ADHOC=1 ./scripts/build-release-candidate.sh
-```
-
-For a distributable candidate, supply a Developer ID Application identity owned by the caller:
-
-```sh
-IMAGE_DEDUPE_SIGNING_IDENTITY="Developer ID Application: …" \
-  ./scripts/build-release-candidate.sh
-```
-
-After configuring a caller-owned `notarytool` keychain profile:
-
-```sh
-IMAGE_DEDUPE_SIGNING_IDENTITY="Developer ID Application: …" \
-IMAGE_DEDUPE_NOTARY_PROFILE="profile-name" \
-  ./scripts/notarize-release.sh "/path/to/Image Dedupe.app"
-```
-
-The release scripts fail closed when required signing or notarization inputs are absent. No credential is stored in this repository.
-
-## Disk Image
-
-`scripts/package-dmg.sh` wraps an already-built candidate into `dist/Image-Dedupe-<version>.dmg` with the usual drag-to-Applications layout. It deliberately does not build: it packages the bundle `build-release-candidate.sh` produced, so the artifact that ships is the one that passed verification rather than a second build that resembles it.
-
-```sh
-IMAGE_DEDUPE_ALLOW_ADHOC=1 ./scripts/package-dmg.sh
-```
-
-It re-runs `verify-release.sh` on the bundle before wrapping it, and refuses ad-hoc signatures unless `IMAGE_DEDUPE_ALLOW_ADHOC=1` is set explicitly — a disk image is where an unverified bundle stops being a local mistake and becomes a download. With `IMAGE_DEDUPE_SIGNING_IDENTITY` set, the image itself is signed too; notarize the `.app` before packaging, since stapling applies to the bundle.
-
-`dist/` is ignored and never committed.
-
-## Project Layout
-
-- `Sources/DeduperCore`: pure models, search/sort, duplicate policy, presentation, and retry policy;
-- `Sources/DeviceMediaKit`: serialized ImageCaptureCore gateway and secure filesystem boundary;
-- `Sources/ImageDedupeApp`: SwiftUI/AppKit application, state, persistence, and views;
-- `Sources/ImageDedupeVerifier`: development-only real-device harness;
-- `Tests`: unit, integration, renderer, operation, persistence, and security regressions;
-- `Packaging`: app Info.plist and privacy manifest;
-- `scripts`: Debug/Release bundle, verification, and notarization tooling.
-
-## Status
-
-The app has been exercised against a connected iPhone and loaded 3,961 of 3,961 media items. The source and the local Hardened Runtime build gate are complete.
-
-Some work is honestly still open: Developer ID signing, Apple notarization and stapling, clean-Mac Gatekeeper validation, a universal build, and the App Sandbox decision. Until those land, the shipped DMG needs the quarantine step above.
+Developer ID signing and Apple notarization are not done yet — that is why the quarantine step above exists. A universal build is on the list too. (The app was formerly named iPhone Dedupe; your existing history and preferences carry across automatically.)
 
 ## License
 
