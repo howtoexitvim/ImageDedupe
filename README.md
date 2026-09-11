@@ -1,16 +1,26 @@
 # Image Dedupe
 
-Image Dedupe is a private, local, Mac-native app for reviewing media on a connected iPhone, downloading selected files, identifying conservative duplicate candidates, and explicitly deleting reviewed device items.
+A local, Mac-native app for reviewing media on a connected iPhone, downloading selected files, identifying conservative duplicate candidates, and explicitly deleting reviewed device items.
 
-It uses Apple's ImageCaptureCore framework. There is no account, cloud backend, analytics, catalog upload, or network client.
+It uses Apple's ImageCaptureCore framework. There is no account, cloud backend, analytics, catalog upload, or network client — everything stays on your Mac.
 
-Formerly named iPhone Dedupe. The rename carries existing operation history and preferences across automatically; see `docs/todo.md` for what migrates and what deliberately keeps its old name.
+## Install
 
-## Current Status
+Download the DMG from the [releases page](../../releases), drag the app to Applications, then clear the download quarantine flag:
 
-Phases 0–8 are merged into `main`. The current Debug app has been exercised against a connected iPhone and loaded 3,961/3,961 media items.
+```sh
+xattr -dr com.apple.quarantine "/Applications/Image Dedupe.app"
+```
 
-The source and local Hardened Runtime build gate are complete. An ad-hoc signed arm64 build is published on the public repository's releases page; because it is not notarized, users must clear the download quarantine flag manually. Developer ID signing, Apple notarization/stapling, clean-Mac Gatekeeper validation, a universal build, and the App Sandbox decision remain open. See [docs/roadmap.md](docs/roadmap.md) for the authoritative remaining-work list.
+The build is ad-hoc signed and **not** notarized, so Gatekeeper blocks it until you do this. Apple silicon (arm64) only. If you would rather not run an unnotarized binary, build from source — see below.
+
+## Status
+
+Phases 0–8 are merged into `main`. The Debug app has been exercised against a connected iPhone and loaded 3,961/3,961 media items.
+
+The source and local Hardened Runtime build gate are complete. Developer ID signing, Apple notarization/stapling, clean-Mac Gatekeeper validation, a universal build, and the App Sandbox decision remain open.
+
+Formerly named iPhone Dedupe. The rename carries existing operation history and preferences across automatically; the old name is kept where an identifier had to stay stable.
 
 ## Requirements
 
@@ -101,14 +111,10 @@ It re-runs `verify-release.sh` on the bundle before wrapping it, and refuses ad-
 - `Packaging`: app Info.plist and privacy manifest;
 - `scripts`: Debug/Release bundle, verification, and notarization tooling.
 
-## Documentation
-
-- [Product specification](docs/spec.md)
-- [Architecture and security boundaries](docs/architecture.md)
-- [Roadmap and remaining work](docs/roadmap.md)
-- [Current handoff and manual validation](docs/handoff.md)
-- [Project log](docs/log.md)
-
 ## Destructive-Action Rule
 
 Device deletion always requires explicit in-app confirmation. Automated or development-harness deletion additionally requires fresh user approval naming the exact fixture files; old approval is never reusable.
+
+## License
+
+[MIT](LICENSE)

@@ -16,3 +16,6 @@ DerivedData/
 
 # Packaged release artifacts
 /dist
+
+# Internal working notes, not published
+/docs
