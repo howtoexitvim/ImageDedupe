@@ -89,3 +89,4 @@ Developer ID signing and Apple notarization are not done yet — that is why the
 ## License
 
 [MIT](LICENSE)
+
